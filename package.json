@@ -1,0 +1,16 @@
+{
+    "name": "plugin-template",
+    "version": "0.0.3",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "dev": "mix watch",
+        "production": "mix --production"
+    },
+    "devDependencies": {
+        "laravel-mix": "^6.0.0",
+        "sass": "^1.32.8",
+        "sass-loader": "^11.0.1",
+        "resolve-url-loader": "^5.0.0"
+    }
+}
