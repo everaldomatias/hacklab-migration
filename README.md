@@ -1,4 +1,4 @@
-# Plugin Template
+# Hacklab Migration
 
 ## Changelog
 
