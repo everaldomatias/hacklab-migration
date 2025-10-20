@@ -12,8 +12,12 @@
 
 Na pasta do plugin instale as dependências com `npm install`. Para rodar o compilador em formato de desenvolvimento, execute `npm run dev`. E para compilar os assets para produção, execute `npm run production`.
 
-## Criando um novo plugin a partir do template
+## Sugestão de fluxo de importação
 
-Dê permissão de execução ao script `setup-plugin.sh` com `chmod +x ./setup-plugin.sh`.
-
-Na pasta do plugin execute `./setup-plugin.sh Nome do Novo Plugin`, ele vai criar uma pasta ao lado da atual com todos arquivos do template já renomeados para o novo plugin.
+- Importar arquivos da pasta /uploads, via rSync ou FTP;
+- Importar taxonomias e seus respectivos termos;
+- Importar usuários;
+- Importar CoAuthors;
+- Importar posts;
+- Rodar o corretor de relacionamento de imagens;
+- Rodar o search/replace.

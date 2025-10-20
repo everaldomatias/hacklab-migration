@@ -213,35 +213,9 @@ function remote_get_posts( array $args = [] ) {
 
     $where = $where_sql ? ( 'WHERE ' . implode( ' AND ', $where_sql ) ) : '';
 
-    $all_fields = [
-        'ID',
-        'post_author',
-        'post_date',
-        'post_date_gmt',
-        'post_content',
-        'post_title',
-        'post_excerpt',
-        'post_status',
-        'comment_status',
-        'ping_status',
-        'post_password',
-        'post_name',
-        'to_ping',
-        'pinged',
-        'post_modified',
-        'post_modified_gmt',
-        'post_content_filtered',
-        'post_parent',
-        'guid',
-        'menu_order',
-        'post_type',
-        'post_mime_type',
-        'comment_count',
-    ];
-
     $select_cols = ( $fields === 'ids' )
         ? 'ID'
-        : implode( ', ', $all_fields );
+        : '*';
 
     $sql = "
         SELECT {$select_cols}
@@ -266,4 +240,356 @@ function remote_get_posts( array $args = [] ) {
     }
 
     return $rows ?: [];
+}
+
+/**
+ * Importa posts do WP remoto para o site atual (single).
+ *
+ * Args aceitos:
+ * - rows           : array de linhas em formato do remote_get_posts() (opcional)
+ * - fetch          : array de args para chamar remote_get_posts() se 'rows' não for passado (opcional)
+ * - replacements   : array de search-replace. Pode ser:
+ *                    - ['old' => 'new', ...] (ordem preservada)
+ *                    - [['from'=>'old','to'=>'new','regex'=>true], ...]
+ * - dry_run        : bool (default false) — não cria nada, só simula
+ *
+ * Retorno:
+ * - ['imported' => int,'updated' =>int, 'skipped' => int, 'attachments' => int, 'map' => [remote-id => local->id], 'errors'=>[...], 'args' => [...]]
+ */
+function import_remote_posts( array $args = [] ): array {
+    $defaults = [
+        'rows'         => null,
+        'fetch'        => ['numberposts' => 10],
+        'replacements' => [],
+        'media'        => [
+            'enabled' => true
+        ],
+        'dry_run'      => false,
+        'changes'      => [] // post_type, taxonomies, terms
+    ];
+
+    $opt     = wp_parse_args( $args, $defaults );
+    $media   = wp_parse_args( $opt['media'], $defaults['media'] );
+    $changes = wp_parse_args( $opt['changes'], $defaults['changes'] );
+
+    $summary = ['imported' => 0, 'updated' => 0, 'skipped' => 0, 'attachments' => 0, 'map' => [], 'errors' => [], 'args' => $opt['fetch']];
+
+    $rows = is_array( $opt['rows'] ) ? $opt['rows'] : remote_get_posts( (array) $opt['fetch'] );
+
+    if ( is_wp_error( $rows ) ) {
+        return [
+            'imported'    => 0,
+            'updated'     => 0,
+            'skipped'     => 0,
+            'attachments' => 0,
+            'map'         => [],
+            'errors'      => [
+                $rows->get_error_message()
+            ],
+            'args' => $opt['fetch']
+        ];
+    }
+
+    if ( ! $rows ) {
+        return $summary;
+    }
+
+    $replacements_rules = normalize_replacements( $opt['replacements'] );
+
+    foreach ( $rows as $row ) {
+        $remote_id   = (int) $row['ID'];
+        $remote_type = (string) $row['post_type'];
+        $remote_st   = (string) $row['post_status'];
+
+        // Verifica se já foi importado (evita duplicidade)
+        $existing = find_local_post( $remote_id, (int) ( $args['fetch']['blog_id'] ?? $args['blog_id'] ?? $row['blog_id'] ?? 1 ) );
+        $is_update = $existing > 0;
+
+        // Monta postarr
+        $title   = apply_replacements( (string) $row['post_title'], $replacements_rules );
+        $content = apply_replacements( (string) $row['post_content'], $replacements_rules );
+        $excerpt = apply_replacements( (string) ( $row['post_excerpt'] ?? '' ), $replacements_rules );
+
+        $post_type = isset( $changes['post_type'] ) && post_type_exists( $changes['post_type'] ) ? $changes['post_type'] : ( post_type_exists( $remote_type ) ? $remote_type : 'post' );
+
+        $postarr = [
+            'post_title'    => $title,
+            'post_content'  => $content,
+            'post_excerpt'  => $excerpt,
+            'post_status'   => in_array( $remote_st, ['publish','draft','pending','private'], true ) ? $remote_st : 'draft',
+            'post_type'     => $post_type,
+            'post_date'     => (string) $row['post_date'],
+            'post_date_gmt '=> (string) ( $row['post_date_gmt'] ?? '' ),
+            'post_author'   => (string) ( $row['post_author'] ?? '' ),
+            'post_name'     => (string) ( $row['post_name'] ?? sanitize_title( $title ) )
+        ];
+
+        // Dry-run
+        if ( $opt['dry_run'] ) {
+            $summary['skipped']++;
+            $summary['map'][$remote_id] = 0;
+            continue;
+        }
+
+        // Metadados - @todo: adicionar replacements nos metadados?
+        $post_meta = isset( $row['post_meta'] ) && is_array( $row['post_meta'] ) ? $row['post_meta'] : [];
+
+        $postarr['meta_input'] = $post_meta;
+        $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
+        $postarr['meta_input']['_hacklab_migration_source_meta']['post_type'] = $remote_type;
+        $postarr['meta_input']['_hacklab_migration_last_update'] = time();
+
+        // Cria ou atualiza o post
+        $local_id = 0;
+
+        if ( $is_update ) {
+            $postarr['ID'] = $existing;
+            $local_id = (int) wp_update_post( $postarr, true );
+
+            if ( is_wp_error( $local_id ) ) {
+                $summary['errors'][] = 'update: ' . $local_id->get_error_message();
+                $summary['skipped']++;
+                continue;
+            }
+
+            $summary['updated']++;
+        } else {
+            $local_id = (int) wp_insert_post( $postarr, true );
+
+            if ( is_wp_error( $local_id ) || $local_id <= 0 ) {
+                $summary['errors'][] = 'insert: ' . ( is_wp_error( $local_id ) ? $local_id->get_error_message() : 'unknown' );
+                $summary['skipped']++;
+                continue;
+            }
+
+            add_post_meta( $local_id, '_hacklab_migration_source_id', $remote_id, true );
+            add_post_meta( $local_id, '_hacklab_migration_source_blog', (int) ( $args['fetch']['blog_id'] ?? $args['blog_id'] ?? $row['blog_id'] ?? 1 ), true );
+            $summary['imported']++;
+        }
+
+        // Mídia (imagens no conteúdo) — opcional
+        if ( ! empty( $media['enabled'] ) ) {
+            [$new_content, $att_count] = import_images_in_content(
+                (string) get_post_field( 'post_content', $local_id ),
+                $local_id
+            );
+            if ( $att_count > 0 ) {
+                $summary['attachments'] += $att_count;
+                wp_update_post( [
+                    'ID'           => $local_id,
+                    'post_content' => $new_content,
+                ] );
+            }
+        }
+
+        $summary['map'][$remote_id] = $local_id;
+    }
+
+    return $summary;
+}
+
+function find_local_post( int $remote_id, int $blog_id = 1 ): int {
+    $q = get_posts( [
+        'post_type'      => 'any',
+        'posts_per_page' => 1,
+        'post_status'    => 'any',
+        'meta_query'     => [
+            ['key' => '_hacklab_migration_source_id',   'value' => $remote_id, 'compare' => '='],
+            ['key' => '_hacklab_migration_source_blog', 'value' => $blog_id,   'compare' => '='],
+        ],
+        'fields'                => 'ids',
+        'no_found_rows'         => true,
+        'update_meta_cache'     => false,
+        'update_post_term_cache'=> false,
+    ] );
+    return $q ? (int) $q[0] : 0;
+}
+
+function apply_replacements( string $text, array $rules ): string {
+    foreach ( $rules as $r ) {
+        if ( ! empty($r['regex'] ) ) {
+            $text = preg_replace( $r['from'], $r['to'], $text );
+        } else {
+            // múltiplos 'from' plain em bloco
+            if ( is_array( $r['from'] ) ) {
+                $text = str_replace( $r['from'], $r['to'], $text );
+            } else {
+                $text = str_replace( (string) $r['from'], (string) $r['to'], $text );
+            }
+        }
+    }
+    return $text;
+}
+
+/**
+ * Normaliza um array de substituições em um formato padronizado.
+ *
+ * Esta função aceita diferentes formatos de entrada para substituições e os converte
+ * em um array de regras padronizado. Os formatos aceitos são:
+ * - Lista indexada de arrays associativos no formato [['from' => ..., 'to' => ..., 'regex' => ...], ...].
+ * - Array associativo simples no formato ['old' => 'new', ...].
+ *
+ * @since 1.0.0
+ *
+ * @param array $replacements Array de substituições a ser normalizado. Pode ser vazio,
+ *                            uma lista indexada de arrays associativos ou um array associativo simples.
+ *
+ * @return array Retorna um array de regras normalizadas no formato:
+ *               [['from' => ..., 'to' => ..., 'regex' => ...], ...].
+ */
+function normalize_replacements( $replacements ): array {
+    $rules = [];
+    if ( ! $replacements ) return $rules;
+
+    // formato ['from'=>'to', ...]
+    if ( \is_array( $replacements ) && array_values( $replacements ) === $replacements ) {
+        // lista indexada? assume já no formato [['from'=>..., 'to'=>...], ...]
+        foreach ( $replacements as $r ) {
+            if ( isset( $r['from'], $r['to'] ) ) {
+                $rules[] = ['from' => $r['from'], 'to' => $r['to'], 'regex' => !empty( $r['regex'] )];
+            }
+        }
+        return $rules;
+    }
+
+    // formato associativo simples: ['old'=>'new', ...]
+    if ( \is_array( $replacements ) ) {
+        foreach ( $replacements as $from => $to ) {
+            $rules[] = ['from' => $from, 'to' => $to, 'regex' => false];
+        }
+    }
+    return $rules;
+}
+
+function import_images_in_content( string $html, int $post_id ): array {
+    if ( $html === '' ) return [$html, 0];
+
+    $urls = extract_image_urls( $html );
+    if ( ! $urls ) return [$html, 0];
+
+    $count = 0;
+    $map   = [];
+
+    foreach ( $urls as $u ) {
+        $existing = find_attachment_by_source_url( $u );
+
+        if ( $existing ) {
+            $new = wp_get_attachment_url( $existing );
+            if ( $new ) {
+                $map[$u] = $new;
+                $count++;
+                continue;
+            }
+        }
+
+        $att_id = sideload_attachment( $u, $post_id );
+        if ( $att_id && ! is_wp_error( $att_id ) ) {
+            add_post_meta( $att_id, '_hacklab_migration_source_url', esc_url_raw( $u ), true );
+            $new = wp_get_attachment_url( (int) $att_id );
+            if ( $new ) {
+                $map[$u] = $new;
+                $count++;
+            }
+        }
+    }
+
+    if ( $map ) {
+        $html = replace_urls_in_content( $html, $map );
+    }
+
+    return [$html, $count];
+}
+
+function extract_image_urls( string $html ): array {
+    $urls = [];
+
+    // src="..."/src='...'
+    if ( preg_match_all( '#\s(?:src)=["\']([^"\']+\.(?:png|jpe?g|gif|webp|svg))["\']#i', $html, $m ) ) {
+        $urls = array_merge( $urls, $m[1] );
+    }
+    // srcset="url w, url2 w"
+    if ( preg_match_all( '#\s(?:srcset)=["\']([^"\']+)["\']#i', $html, $m ) ) {
+        foreach ( $m[1] as $list ) {
+            foreach ( preg_split('/\s*,\s*/', $list ) as $entry ) {
+                $parts = preg_split( '/\s+/', trim( $entry ) );
+                $u = $parts[0] ?? '';
+                if ( $u && preg_match( '#\.(png|jpe?g|gif|webp|svg)(\?.*)?$#i', $u ) ) {
+                    $urls[] = $u;
+                }
+            }
+        }
+    }
+
+    // <a href="...img.ext">
+    if ( preg_match_all( '#<a[^>]+href=["\']([^"\']+\.(?:png|jpe?g|gif|webp|svg))["\']#i', $html, $m ) ) {
+        $urls = array_merge( $urls, $m[1] );
+    }
+
+    $urls = array_values( array_unique( array_map( 'esc_url_raw', $urls ) ) );
+    return $urls;
+}
+
+function find_attachment_by_source_url( string $url ): int {
+    $q = get_posts( [
+        'post_type'             => 'attachment',
+        'posts_per_page'        => 1,
+        'meta_key'              => '_hacklab_migration_source_url',
+        'meta_value'            => esc_url_raw( $url ),
+        'fields'                => 'ids',
+        'no_found_rows'         => true,
+        'update_post_term_cache'=> false,
+        'update_meta_cache'     => false
+    ] );
+
+    return $q ? (int)$q[0] : 0;
+}
+
+function sideload_attachment( string $url, int $post_id ) {
+    if ( ! function_exists( 'download_url' ) )  require_once ABSPATH . 'wp-admin/includes/file.php';
+    if ( ! function_exists( 'wp_handle_sideload' ) ) require_once ABSPATH . 'wp-admin/includes/file.php';
+    if ( ! function_exists( 'wp_generate_attachment_metadata' ) ) require_once ABSPATH . 'wp-admin/includes/image.php';
+
+    $tmp = download_url( $url, 15 );
+    if ( is_wp_error( $tmp ) ) return $tmp;
+
+    $filename = wp_basename( parse_url( $url, PHP_URL_PATH ) ?? '' );
+    $file = [
+        'name'     => $filename ?: 'remote-file',
+        'type'     => mime_content_type( $tmp ) ?: 'image/jpeg',
+        'tmp_name' => $tmp,
+        'error'    => 0,
+        'size'     => filesize( $tmp )
+    ];
+
+    $overrides = ['test_form' => false];
+    $sideload  = wp_handle_sideload( $file, $overrides );
+    if ( isset( $sideload['error'] ) ) {
+        @unlink( $tmp );
+        return new \WP_Error( 'sideload', $sideload['error'] );
+    }
+
+    $attachment = [
+        'post_mime_type' => $sideload['type'],
+        'post_title'     => sanitize_text_field( pathinfo( $file['name'], PATHINFO_FILENAME ) ),
+        'post_content'   => '',
+        'post_status'    => 'inherit',
+        'post_parent'    => $post_id,
+    ];
+
+    $attach_id = wp_insert_attachment( $attachment, $sideload['file'], $post_id );
+
+    if ( is_wp_error( $attach_id ) ) {
+        return $attach_id;
+    }
+
+    $metadata = wp_generate_attachment_metadata( $attach_id, $sideload['file'] );
+    wp_update_attachment_metadata( $attach_id, $metadata );
+
+    return $attach_id;
+}
+
+/** Substitui URLs no conteúdo (inclusive dentro de srcset). */
+function replace_urls_in_content( string $html, array $map ): string {
+    if ( ! $map ) return $html;
+    return strtr( $html, $map );
 }
