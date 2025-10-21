@@ -33,7 +33,7 @@ function resolve_remote_posts_table( \wpdb $ext, array $creds, ?int $blog_id ): 
     return $prefix . ( (int) $blog_id ) . '_posts';
 }
 
-function resolve_remote_postmeta_table( \wpdb $ext, array $creds, ?int $blog_id): string {
+function resolve_remote_postmeta_table( \wpdb $ext, array $creds, ?int $blog_id ): string {
     $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
     $is_ms  = ! empty( $creds['is_multisite'] );
 
@@ -42,6 +42,100 @@ function resolve_remote_postmeta_table( \wpdb $ext, array $creds, ?int $blog_id)
     }
 
     return $prefix . ( (int) $blog_id ) . '_postmeta';
+}
+
+function resolve_remote_terms_tables( \wpdb $ext, array $creds, ?int $blog_id ): array {
+    $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+    $is_ms  = ! empty( $creds['is_multisite'] );
+    $mid = ( ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) ? '' : ( (int) $blog_id . '_' );
+
+    return [
+        'terms' => $prefix . $mid . 'terms',
+        'term_taxonomy' => $prefix . $mid . 'term_taxonomy',
+        'term_relationships' => $prefix . $mid . 'term_relationships'
+    ];
+}
+
+function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, array $only_tax = [] ): array {
+    $ext = get_external_wpdb();
+    if ( ! $ext || ! $post_ids ) return [];
+
+    $creds = get_credentials();
+    $tables = resolve_remote_terms_tables( $ext, $creds, $blog_id );
+
+    $post_ids = array_values( array_unique( array_map( 'intval', $post_ids ) ) );
+    if ( ! $post_ids ) return [];
+
+    $ph_ids = implode( ',', array_fill( 0, count( $post_ids ), '%d' ) );
+    $params = $post_ids;
+
+    $sql = "
+        SELECT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug
+          FROM {$tables['term_taxonomy']} tt
+          JOIN {$tables['term_relationships']} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+          JOIN {$tables['terms']} t ON t.term_id = tt.term_id
+         WHERE tr.object_id IN ({$ph_ids})
+    ";
+
+    if ( $only_tax ) {
+        $only_tax = array_values( array_filter( array_map( 'strval', $only_tax ), static fn( $v ) => $v !== '' ) );
+        if ( $only_tax ) {
+            $ph_tx = implode( ',', array_fill( 0, count( $only_tax ), '%s' ) );
+            $sql  .= " AND tt.taxonomy IN ({$ph_tx})";
+            $params = array_merge( $params, $only_tax );
+        }
+    }
+
+    $prepared = $ext->prepare( $sql, $params );
+
+    $rows = $ext->get_results( $prepared, ARRAY_A ) ?: [];
+
+    $out = [];
+    foreach ( $rows as $r ) {
+        $pid = (int) $r['post_id'];
+        $tx  = (string) $r['taxonomy'];
+        $out[$pid][$tx][] = [
+            'term_id' => (int) $r['term_id'],
+            'name'    => (string) $r['name'],
+            'slug'    => (string) $r['slug']
+        ];
+    }
+    return $out;
+}
+
+function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_by_tax, array $tax_map = [] ) : void {
+    if ( ! $terms_by_tax ) return;
+
+    $allowed_tax = array_fill_keys( get_object_taxonomies( $post_type, 'names' ), true );
+
+    foreach ( $terms_by_tax as $remote_tax => $term_list ) {
+        $local_tax = $tax_map[$remote_tax] ?? $remote_tax;
+
+        if ( ! taxonomy_exists( $local_tax ) || empty( $allowed_tax[$local_tax] ) ) {
+            continue;
+        }
+
+        $to_set = [];
+        foreach ( $term_list as $t ) {
+            $slug = sanitize_title( $t['slug'] ?: $t['name'] );
+            $name = $t['name'];
+
+            $exists = term_exists( $slug, $local_tax );
+            if ( ! $exists ) {
+                $ins = wp_insert_term( $name, $local_tax, ['slug' => $slug] );
+                if ( ! is_wp_error( $ins ) && ! empty( $ins['term_id'] ) ) {
+                    $to_set[] = (int) $ins['term_id'];
+                }
+            } else {
+                $term_id = is_array( $exists ) ? (int) $exists['term_id'] : (int) $exists;
+                $to_set[] = $term_id;
+            }
+        }
+
+        if ( $to_set ) {
+            wp_set_object_terms( $post_id, array_values( array_unique( $to_set ) ), $local_tax, false );
+        }
+    }
 }
 
 function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_id, array $meta_keys = [] ) {
@@ -265,7 +359,11 @@ function import_remote_posts( array $args = [] ): array {
             'enabled' => true
         ],
         'dry_run'      => false,
-        'changes'      => [] // post_type, taxonomies, terms
+        'changes'      => [
+            // post_type destino e mapeamento de taxonomias (opcional)
+            // 'post_type' => 'post',
+            // 'tax_map'   => ['tag_remota' => 'post_tag', 'categoria_remota' => 'category'],
+        ]
     ];
 
     $opt     = wp_parse_args( $args, $defaults );
@@ -294,7 +392,15 @@ function import_remote_posts( array $args = [] ): array {
         return $summary;
     }
 
+    $blog_id = (int) ( $opt['fetch']['blog_id'] ?? $args['blog_id'] ?? 1 );
     $replacements_rules = normalize_replacements( $opt['replacements'] );
+
+    $remote_ids = array_map( static fn( $r )=> (int) $r['ID'], $rows );
+    $terms_map  = fetch_remote_terms_for_posts( $remote_ids, $blog_id );
+
+    echo '<pre>';
+        var_dump ( $terms_map );
+    echo '</pre>';
 
     foreach ( $rows as $row ) {
         $remote_id   = (int) $row['ID'];
@@ -302,7 +408,7 @@ function import_remote_posts( array $args = [] ): array {
         $remote_st   = (string) $row['post_status'];
 
         // Verifica se já foi importado (evita duplicidade)
-        $existing = find_local_post( $remote_id, (int) ( $args['fetch']['blog_id'] ?? $args['blog_id'] ?? $row['blog_id'] ?? 1 ) );
+        $existing = find_local_post( $remote_id, $blog_id );
         $is_update = $existing > 0;
 
         // Monta postarr
@@ -319,7 +425,7 @@ function import_remote_posts( array $args = [] ): array {
             'post_status'   => in_array( $remote_st, ['publish','draft','pending','private'], true ) ? $remote_st : 'draft',
             'post_type'     => $post_type,
             'post_date'     => (string) $row['post_date'],
-            'post_date_gmt '=> (string) ( $row['post_date_gmt'] ?? '' ),
+            'post_date_gmt' => (string) ( $row['post_date_gmt'] ?? '' ),
             'post_author'   => (string) ( $row['post_author'] ?? '' ),
             'post_name'     => (string) ( $row['post_name'] ?? sanitize_title( $title ) )
         ];
@@ -366,6 +472,11 @@ function import_remote_posts( array $args = [] ): array {
             add_post_meta( $local_id, '_hacklab_migration_source_blog', (int) ( $args['fetch']['blog_id'] ?? $args['blog_id'] ?? $row['blog_id'] ?? 1 ), true );
             $summary['imported']++;
         }
+
+        // Taxonomias/termos
+        $row_terms = $terms_map[$remote_id] ?? [];
+        $tax_map   = isset( $changes['tax_map'] ) && is_array( $changes['tax_map'] ) ? $changes['tax_map'] : [];
+        ensure_terms_and_assign( $local_id, $post_type, $row_terms, $tax_map );
 
         // Mídia (imagens no conteúdo) — opcional
         if ( ! empty( $media['enabled'] ) ) {
