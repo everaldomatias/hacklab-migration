@@ -311,21 +311,19 @@ function import_remote_posts( array $args = [] ): array {
     ];
 
     $options = wp_parse_args( $args, $defaults );
-    $media   = wp_parse_args( $options['media'], $defaults['media'] );
 
     $summary = [
         'found_posts' => 0,
-        'imported' => 0,
-        'updated' => 0,
-        'skipped' => 0,
+        'imported'    => 0,
+        'updated'     => 0,
+        'skipped'     => 0,
         'attachments' => 0,
-        'map' => [],
-        'errors' => [],
-        'args' => $options['fetch']
+        'map'         => [],
+        'errors'      => [],
+        'args'        => $options['fetch']
     ];
 
     $rows = is_array( $options['rows'] ) ? $options['rows'] : remote_get_posts( (array) $options['fetch'] );
-
 
     if ( is_wp_error( $rows ) ) {
         $summary['errors'][] = $rows->get_error_message();
@@ -339,11 +337,13 @@ function import_remote_posts( array $args = [] ): array {
     $summary['found_posts'] = count( $rows );
 
     $blog_id = (int) ( $options['fetch']['blog_id'] ?? $args['blog_id'] ?? 1 );
-    $remote_posts_ids = array_map( static fn( $r ) => (int) $r['ID'], $rows );
+
+    $remote_ids = array_map( static fn( $r ) => (int) $r['ID'], $rows );
+    $terms_map  = fetch_remote_terms_for_posts( $remote_ids, $blog_id );
 
     foreach ( $rows as $row ) {
         $remote_id     = (int) $row['ID'];
-        $remote_type   = (string) post_type_exists( $row['post_type'] ) ? $row['post_type'] : 'post';
+        $remote_type   = post_type_exists( $row['post_type'] ) ? (string) $row['post_type'] : 'post';
         $remote_status = (string) $row['post_status'];
 
         // Verifica se já foi importado
@@ -405,7 +405,7 @@ function import_remote_posts( array $args = [] ): array {
         ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms );
 
         // Mídia (imagens no conteúdo) — opcional
-        if ( ! empty( $media['enabled'] ) ) {
+        if ( ! empty( $options['media'] ) ) {
             [$new_content, $att_count] = import_images_in_content(
                 (string) get_post_field( 'post_content', $local_id ),
                 $local_id
@@ -422,17 +422,6 @@ function import_remote_posts( array $args = [] ): array {
         if ( ! empty( $options['fn'] ) && is_callable( $options['fn'] ) ) {
             $row['blog_id'] = $blog_id;
 
-            $data = [
-                // 'remote' => $row,
-                // 'local_id' => $local_id,
-
-                // 'assign_terms' => static function (array $termsByTax, array $map = []) use ($local_id) {
-                //     ensure_terms_and_assign($local_id, get_post_type($local_id), $termsByTax, $map);
-                // },
-                // 'remap_terms'  => static function (array $ops, bool $dryRun = false) use ($local_id) {
-                //     return remap_terms($local_id, $ops, $dryRun);
-                // }
-            ];
             try {
                 ( $options['fn'])( $local_id, $row, $is_update, $options['dry_run'] );
             } catch (\Throwable $e) {
