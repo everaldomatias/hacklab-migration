@@ -16,52 +16,14 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 function log_message( string $message, string $level = 'info' ) : void {}
 
-/**
- * Resolve o nome completo da tabela de posts remota considerando multisite.
- * - Single: "{$prefix}posts"
- * - Multisite blog 1: "{$prefix}posts"
- * - Multisite blog N>1: "{$prefix}{$blog_id}_posts"
- */
-function resolve_remote_posts_table( \wpdb $ext, array $creds, ?int $blog_id ): string {
-    $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
-    $is_ms  = ! empty( $creds['is_multisite'] );
 
-    if ( ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) {
-        return $prefix . 'posts';
-    }
-
-    return $prefix . ( (int) $blog_id ) . '_posts';
-}
-
-function resolve_remote_postmeta_table( \wpdb $ext, array $creds, ?int $blog_id ): string {
-    $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
-    $is_ms  = ! empty( $creds['is_multisite'] );
-
-    if ( ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) {
-        return $prefix . 'postmeta';
-    }
-
-    return $prefix . ( (int) $blog_id ) . '_postmeta';
-}
-
-function resolve_remote_terms_tables( \wpdb $ext, array $creds, ?int $blog_id ): array {
-    $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
-    $is_ms  = ! empty( $creds['is_multisite'] );
-    $mid = ( ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) ? '' : ( (int) $blog_id . '_' );
-
-    return [
-        'terms' => $prefix . $mid . 'terms',
-        'term_taxonomy' => $prefix . $mid . 'term_taxonomy',
-        'term_relationships' => $prefix . $mid . 'term_relationships'
-    ];
-}
 
 function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, array $only_tax = [] ): array {
     $ext = get_external_wpdb();
     if ( ! $ext || ! $post_ids ) return [];
 
     $creds = get_credentials();
-    $tables = resolve_remote_terms_tables( $ext, $creds, $blog_id );
+    $tables = resolve_remote_terms_tables( $creds, $blog_id );
 
     $post_ids = array_values( array_unique( array_map( 'intval', $post_ids ) ) );
     if ( ! $post_ids ) return [];
@@ -150,7 +112,7 @@ function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_
         return $rows;
     }
 
-    $postmeta = resolve_remote_postmeta_table( $ext, $creds, $blog_id );
+    $postmeta = resolve_remote_postmeta_table( $creds, $blog_id );
 
     $ph_ids = implode( ',', array_fill( 0, count( $post_ids ), '%d' ) );
     $params = $post_ids;
@@ -253,7 +215,7 @@ function remote_get_posts( array $args = [] ) {
 
     $fields = ( $a['fields'] === 'ids' ) ? 'ids' : 'all';
 
-    $table_posts = resolve_remote_posts_table( $ext, $creds, $a['blog_id'] );
+    $table_posts = resolve_remote_posts_table( $creds, $a['blog_id'] );
     $table_posts_quoted = $table_posts;
 
     $where_sql = [];
@@ -338,115 +300,81 @@ function remote_get_posts( array $args = [] ) {
 
 /**
  * Importa posts do WP remoto para o site atual (single).
- *
- * Args aceitos:
- * - rows           : array de linhas em formato do remote_get_posts() (opcional)
- * - fetch          : array de args para chamar remote_get_posts() se 'rows' não for passado (opcional)
- * - replacements   : array de search-replace. Pode ser:
- *                    - ['old' => 'new', ...] (ordem preservada)
- *                    - [['from'=>'old','to'=>'new','regex'=>true], ...]
- * - dry_run        : bool (default false) — não cria nada, só simula
- *
- * Retorno:
- * - ['imported' => int,'updated' =>int, 'skipped' => int, 'attachments' => int, 'map' => [remote-id => local->id], 'errors'=>[...], 'args' => [...]]
  */
 function import_remote_posts( array $args = [] ): array {
     $defaults = [
-        'rows'         => null,
-        'fetch'        => ['numberposts' => 10],
-        'replacements' => [],
-        'media'        => [
-            'enabled' => true
-        ],
-        'dry_run'      => false,
-        'changes'      => [
-            // post_type destino e mapeamento de taxonomias (opcional)
-            // 'post_type' => 'post',
-            // 'tax_map'   => ['tag_remota' => 'post_tag', 'categoria_remota' => 'category'],
-        ]
+        'rows'    => null,
+        'fetch'   => ['numberposts' => 10],
+        'media'   => true,
+        'dry_run' => false,
+        'fn'      => null
     ];
 
-    $opt     = wp_parse_args( $args, $defaults );
-    $media   = wp_parse_args( $opt['media'], $defaults['media'] );
-    $changes = wp_parse_args( $opt['changes'], $defaults['changes'] );
+    $options = wp_parse_args( $args, $defaults );
+    $media   = wp_parse_args( $options['media'], $defaults['media'] );
 
-    $summary = ['imported' => 0, 'updated' => 0, 'skipped' => 0, 'attachments' => 0, 'map' => [], 'errors' => [], 'args' => $opt['fetch']];
+    $summary = [
+        'found_posts' => 0,
+        'imported' => 0,
+        'updated' => 0,
+        'skipped' => 0,
+        'attachments' => 0,
+        'map' => [],
+        'errors' => [],
+        'args' => $options['fetch']
+    ];
 
-    $rows = is_array( $opt['rows'] ) ? $opt['rows'] : remote_get_posts( (array) $opt['fetch'] );
+    $rows = is_array( $options['rows'] ) ? $options['rows'] : remote_get_posts( (array) $options['fetch'] );
+
 
     if ( is_wp_error( $rows ) ) {
-        return [
-            'imported'    => 0,
-            'updated'     => 0,
-            'skipped'     => 0,
-            'attachments' => 0,
-            'map'         => [],
-            'errors'      => [
-                $rows->get_error_message()
-            ],
-            'args' => $opt['fetch']
-        ];
+        $summary['errors'][] = $rows->get_error_message();
+        return $summary;
     }
 
     if ( ! $rows ) {
         return $summary;
     }
 
-    $blog_id = (int) ( $opt['fetch']['blog_id'] ?? $args['blog_id'] ?? 1 );
-    $replacements_rules = normalize_replacements( $opt['replacements'] );
+    $summary['found_posts'] = count( $rows );
 
-    $remote_ids = array_map( static fn( $r )=> (int) $r['ID'], $rows );
-    $terms_map  = fetch_remote_terms_for_posts( $remote_ids, $blog_id );
-
-    echo '<pre>';
-        var_dump ( $terms_map );
-    echo '</pre>';
+    $blog_id = (int) ( $options['fetch']['blog_id'] ?? $args['blog_id'] ?? 1 );
+    $remote_posts_ids = array_map( static fn( $r ) => (int) $r['ID'], $rows );
 
     foreach ( $rows as $row ) {
-        $remote_id   = (int) $row['ID'];
-        $remote_type = (string) $row['post_type'];
-        $remote_st   = (string) $row['post_status'];
+        $remote_id     = (int) $row['ID'];
+        $remote_type   = (string) post_type_exists( $row['post_type'] ) ? $row['post_type'] : 'post';
+        $remote_status = (string) $row['post_status'];
 
-        // Verifica se já foi importado (evita duplicidade)
+        // Verifica se já foi importado
         $existing = find_local_post( $remote_id, $blog_id );
         $is_update = $existing > 0;
 
-        // Monta postarr
-        $title   = apply_replacements( (string) $row['post_title'], $replacements_rules );
-        $content = apply_replacements( (string) $row['post_content'], $replacements_rules );
-        $excerpt = apply_replacements( (string) ( $row['post_excerpt'] ?? '' ), $replacements_rules );
-
-        $post_type = isset( $changes['post_type'] ) && post_type_exists( $changes['post_type'] ) ? $changes['post_type'] : ( post_type_exists( $remote_type ) ? $remote_type : 'post' );
-
         $postarr = [
-            'post_title'    => $title,
-            'post_content'  => $content,
-            'post_excerpt'  => $excerpt,
-            'post_status'   => in_array( $remote_st, ['publish','draft','pending','private'], true ) ? $remote_st : 'draft',
-            'post_type'     => $post_type,
+            'post_title'    => (string) $row['post_title'],
+            'post_content'  => (string) $row['post_content'],
+            'post_excerpt'  => (string) ( $row['post_excerpt'] ?? '' ),
+            'post_status'   => in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'draft',
+            'post_type'     => $remote_type,
             'post_date'     => (string) $row['post_date'],
             'post_date_gmt' => (string) ( $row['post_date_gmt'] ?? '' ),
             'post_author'   => (string) ( $row['post_author'] ?? '' ),
-            'post_name'     => (string) ( $row['post_name'] ?? sanitize_title( $title ) )
+            'post_name'     => (string) ( $row['post_name'] ?? sanitize_title( (string) $row['post_title'] ) )
         ];
 
-        // Dry-run
-        if ( $opt['dry_run'] ) {
-            $summary['skipped']++;
-            $summary['map'][$remote_id] = 0;
-            continue;
-        }
-
-        // Metadados - @todo: adicionar replacements nos metadados?
-        $post_meta = isset( $row['post_meta'] ) && is_array( $row['post_meta'] ) ? $row['post_meta'] : [];
+        $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
 
         $postarr['meta_input'] = $post_meta;
         $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
         $postarr['meta_input']['_hacklab_migration_source_meta']['post_type'] = $remote_type;
         $postarr['meta_input']['_hacklab_migration_last_update'] = time();
 
-        // Cria ou atualiza o post
-        $local_id = 0;
+        // Dry-run
+        if ( $options['dry_run'] ) {
+            $summary['skipped']++;
+            $summary['map'][$remote_id] = 0;
+            continue;
+        }
 
         if ( $is_update ) {
             $postarr['ID'] = $existing;
@@ -473,10 +401,8 @@ function import_remote_posts( array $args = [] ): array {
             $summary['imported']++;
         }
 
-        // Taxonomias/termos
         $row_terms = $terms_map[$remote_id] ?? [];
-        $tax_map   = isset( $changes['tax_map'] ) && is_array( $changes['tax_map'] ) ? $changes['tax_map'] : [];
-        ensure_terms_and_assign( $local_id, $post_type, $row_terms, $tax_map );
+        ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms );
 
         // Mídia (imagens no conteúdo) — opcional
         if ( ! empty( $media['enabled'] ) ) {
@@ -493,12 +419,47 @@ function import_remote_posts( array $args = [] ): array {
             }
         }
 
+        if ( ! empty( $options['fn'] ) && is_callable( $options['fn'] ) ) {
+            $row['blog_id'] = $blog_id;
+
+            $data = [
+                // 'remote' => $row,
+                // 'local_id' => $local_id,
+
+                // 'assign_terms' => static function (array $termsByTax, array $map = []) use ($local_id) {
+                //     ensure_terms_and_assign($local_id, get_post_type($local_id), $termsByTax, $map);
+                // },
+                // 'remap_terms'  => static function (array $ops, bool $dryRun = false) use ($local_id) {
+                //     return remap_terms($local_id, $ops, $dryRun);
+                // }
+            ];
+            try {
+                ( $options['fn'])( $local_id, $row, $is_update, $options['dry_run'] );
+            } catch (\Throwable $e) {
+                $summary['errors'][] = "fn ({$local_id}): " . $e->getMessage();
+            }
+        }
+
+
         $summary['map'][$remote_id] = $local_id;
     }
 
     return $summary;
 }
 
+
+/**
+ * Localiza o post local correspondente a um post remoto, baseado em metadados de migração.
+ *
+ * @since 1.0.0
+ * @version 1.0.0
+ *
+ * @param int $remote_id  ID do post na instalação de origem (remota).
+ * @param int $blog_id    ID do blog de origem (no multisite). Padrão: 1.
+ *
+ * @return int            ID do post local correspondente, ou 0 se não encontrado.
+ *
+ */
 function find_local_post( int $remote_id, int $blog_id = 1 ): int {
     $q = get_posts( [
         'post_type'      => 'any',
@@ -514,62 +475,6 @@ function find_local_post( int $remote_id, int $blog_id = 1 ): int {
         'update_post_term_cache'=> false,
     ] );
     return $q ? (int) $q[0] : 0;
-}
-
-function apply_replacements( string $text, array $rules ): string {
-    foreach ( $rules as $r ) {
-        if ( ! empty($r['regex'] ) ) {
-            $text = preg_replace( $r['from'], $r['to'], $text );
-        } else {
-            // múltiplos 'from' plain em bloco
-            if ( is_array( $r['from'] ) ) {
-                $text = str_replace( $r['from'], $r['to'], $text );
-            } else {
-                $text = str_replace( (string) $r['from'], (string) $r['to'], $text );
-            }
-        }
-    }
-    return $text;
-}
-
-/**
- * Normaliza um array de substituições em um formato padronizado.
- *
- * Esta função aceita diferentes formatos de entrada para substituições e os converte
- * em um array de regras padronizado. Os formatos aceitos são:
- * - Lista indexada de arrays associativos no formato [['from' => ..., 'to' => ..., 'regex' => ...], ...].
- * - Array associativo simples no formato ['old' => 'new', ...].
- *
- * @since 1.0.0
- *
- * @param array $replacements Array de substituições a ser normalizado. Pode ser vazio,
- *                            uma lista indexada de arrays associativos ou um array associativo simples.
- *
- * @return array Retorna um array de regras normalizadas no formato:
- *               [['from' => ..., 'to' => ..., 'regex' => ...], ...].
- */
-function normalize_replacements( $replacements ): array {
-    $rules = [];
-    if ( ! $replacements ) return $rules;
-
-    // formato ['from'=>'to', ...]
-    if ( \is_array( $replacements ) && array_values( $replacements ) === $replacements ) {
-        // lista indexada? assume já no formato [['from'=>..., 'to'=>...], ...]
-        foreach ( $replacements as $r ) {
-            if ( isset( $r['from'], $r['to'] ) ) {
-                $rules[] = ['from' => $r['from'], 'to' => $r['to'], 'regex' => !empty( $r['regex'] )];
-            }
-        }
-        return $rules;
-    }
-
-    // formato associativo simples: ['old'=>'new', ...]
-    if ( \is_array( $replacements ) ) {
-        foreach ( $replacements as $from => $to ) {
-            $rules[] = ['from' => $from, 'to' => $to, 'regex' => false];
-        }
-    }
-    return $rules;
 }
 
 function import_images_in_content( string $html, int $post_id ): array {
