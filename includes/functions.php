@@ -404,6 +404,11 @@ function import_remote_posts( array $args = [] ): array {
         $row_terms = $terms_map[$remote_id] ?? [];
         ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms );
 
+        $featured_image = ensure_featured_image_from_remote( $local_id, $postarr['meta_input'], $blog_id, false );
+        if ( $featured_image['status'] === 'downloaded' ) {
+            $summary['attachments']++;
+        }
+
         // Mídia (imagens no conteúdo) — opcional
         if ( ! empty( $options['media'] ) ) {
             [$new_content, $att_count] = import_images_in_content(
@@ -532,65 +537,6 @@ function extract_image_urls( string $html ): array {
 
     $urls = array_values( array_unique( array_map( 'esc_url_raw', $urls ) ) );
     return $urls;
-}
-
-function find_attachment_by_source_url( string $url ): int {
-    $q = get_posts( [
-        'post_type'             => 'attachment',
-        'posts_per_page'        => 1,
-        'meta_key'              => '_hacklab_migration_source_url',
-        'meta_value'            => esc_url_raw( $url ),
-        'fields'                => 'ids',
-        'no_found_rows'         => true,
-        'update_post_term_cache'=> false,
-        'update_meta_cache'     => false
-    ] );
-
-    return $q ? (int)$q[0] : 0;
-}
-
-function sideload_attachment( string $url, int $post_id ) {
-    if ( ! function_exists( 'download_url' ) )  require_once ABSPATH . 'wp-admin/includes/file.php';
-    if ( ! function_exists( 'wp_handle_sideload' ) ) require_once ABSPATH . 'wp-admin/includes/file.php';
-    if ( ! function_exists( 'wp_generate_attachment_metadata' ) ) require_once ABSPATH . 'wp-admin/includes/image.php';
-
-    $tmp = download_url( $url, 15 );
-    if ( is_wp_error( $tmp ) ) return $tmp;
-
-    $filename = wp_basename( parse_url( $url, PHP_URL_PATH ) ?? '' );
-    $file = [
-        'name'     => $filename ?: 'remote-file',
-        'type'     => mime_content_type( $tmp ) ?: 'image/jpeg',
-        'tmp_name' => $tmp,
-        'error'    => 0,
-        'size'     => filesize( $tmp )
-    ];
-
-    $overrides = ['test_form' => false];
-    $sideload  = wp_handle_sideload( $file, $overrides );
-    if ( isset( $sideload['error'] ) ) {
-        @unlink( $tmp );
-        return new \WP_Error( 'sideload', $sideload['error'] );
-    }
-
-    $attachment = [
-        'post_mime_type' => $sideload['type'],
-        'post_title'     => sanitize_text_field( pathinfo( $file['name'], PATHINFO_FILENAME ) ),
-        'post_content'   => '',
-        'post_status'    => 'inherit',
-        'post_parent'    => $post_id,
-    ];
-
-    $attach_id = wp_insert_attachment( $attachment, $sideload['file'], $post_id );
-
-    if ( is_wp_error( $attach_id ) ) {
-        return $attach_id;
-    }
-
-    $metadata = wp_generate_attachment_metadata( $attach_id, $sideload['file'] );
-    wp_update_attachment_metadata( $attach_id, $metadata );
-
-    return $attach_id;
 }
 
 /** Substitui URLs no conteúdo (inclusive dentro de srcset). */
