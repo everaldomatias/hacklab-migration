@@ -320,7 +320,8 @@ function import_remote_posts( array $args = [] ): array {
         'attachments' => 0,
         'map'         => [],
         'errors'      => [],
-        'args'        => $options['fetch']
+        'args'        => $options['fetch'],
+        'rows'        => []
     ];
 
     $rows = is_array( $options['rows'] ) ? $options['rows'] : remote_get_posts( (array) $options['fetch'] );
@@ -335,6 +336,7 @@ function import_remote_posts( array $args = [] ): array {
     }
 
     $summary['found_posts'] = count( $rows );
+    $summary['rows'] = $rows;
 
     $blog_id = (int) ( $options['fetch']['blog_id'] ?? $args['blog_id'] ?? 1 );
 
@@ -404,26 +406,6 @@ function import_remote_posts( array $args = [] ): array {
         $row_terms = $terms_map[$remote_id] ?? [];
         ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms );
 
-        $featured_image = ensure_featured_image_from_remote( $local_id, $postarr['meta_input'], $blog_id, false );
-        if ( $featured_image['status'] === 'downloaded' ) {
-            $summary['attachments']++;
-        }
-
-        // Mídia (imagens no conteúdo) — opcional
-        if ( ! empty( $options['media'] ) ) {
-            [$new_content, $att_count] = import_images_in_content(
-                (string) get_post_field( 'post_content', $local_id ),
-                $local_id
-            );
-            if ( $att_count > 0 ) {
-                $summary['attachments'] += $att_count;
-                wp_update_post( [
-                    'ID'           => $local_id,
-                    'post_content' => $new_content,
-                ] );
-            }
-        }
-
         if ( ! empty( $options['fn'] ) && is_callable( $options['fn'] ) ) {
             $row['blog_id'] = $blog_id;
 
@@ -471,45 +453,6 @@ function find_local_post( int $remote_id, int $blog_id = 1 ): int {
     return $q ? (int) $q[0] : 0;
 }
 
-function import_images_in_content( string $html, int $post_id ): array {
-    if ( $html === '' ) return [$html, 0];
-
-    $urls = extract_image_urls( $html );
-    if ( ! $urls ) return [$html, 0];
-
-    $count = 0;
-    $map   = [];
-
-    foreach ( $urls as $u ) {
-        $existing = find_attachment_by_source_url( $u );
-
-        if ( $existing ) {
-            $new = wp_get_attachment_url( $existing );
-            if ( $new ) {
-                $map[$u] = $new;
-                $count++;
-                continue;
-            }
-        }
-
-        $att_id = sideload_attachment( $u, $post_id );
-        if ( $att_id && ! is_wp_error( $att_id ) ) {
-            add_post_meta( $att_id, '_hacklab_migration_source_url', esc_url_raw( $u ), true );
-            $new = wp_get_attachment_url( (int) $att_id );
-            if ( $new ) {
-                $map[$u] = $new;
-                $count++;
-            }
-        }
-    }
-
-    if ( $map ) {
-        $html = replace_urls_in_content( $html, $map );
-    }
-
-    return [$html, $count];
-}
-
 function extract_image_urls( string $html ): array {
     $urls = [];
 
@@ -541,6 +484,37 @@ function extract_image_urls( string $html ): array {
 
 /** Substitui URLs no conteúdo (inclusive dentro de srcset). */
 function replace_urls_in_content( string $html, array $map ): string {
-    if ( ! $map ) return $html;
+    if ( ! $map || $html === '' ) return $html;
     return strtr( $html, $map );
+}
+
+function build_uploads_url_map( string $old_base, string $new_base, ?int $remote_blog_id ): array {
+    $old = rtrim( $old_base );
+    $new = rtrim( $new_base );
+
+    if ( $old === '' || $new === '' || $old === $new ) {
+        return [];
+    }
+
+    $pairs = [];
+
+    if ( $remote_blog_id && $remote_blog_id > 1 ) {
+        $pairs["{$old}/sites/{$remote_blog_id}"] = $new;
+
+        if ( str_starts_with( $old, 'http://' ) ) {
+            $pairs[preg_replace( '#^http://#', '//', "{$old}/sites/{$remote_blog_id}", 1 )] = $new;
+        } elseif ( str_starts_with( $old, 'https://' ) ) {
+            $pairs[preg_replace( '#^https://#', '//', "{$old}/sites/{$remote_blog_id}", 1 )] = $new;
+        }
+    }
+
+    $pairs[$old] = $new;
+
+    if ( str_starts_with( $old, 'http://' ) ) {
+        $pairs[preg_replace( '#^http://#', '//', $old, 1 )] = $new;
+    } elseif ( str_starts_with( $old, 'https://' ) ) {
+        $pairs[preg_replace( '#^https://#', '//', $old, 1 )] = $new;
+    }
+
+    return $pairs;
 }
