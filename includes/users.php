@@ -15,19 +15,22 @@ function import_remote_users( array $args ) : array {
     global $wpdb;
 
     $defaults = [
-        'blog_id' => null,
+        'blog_id'     => null,
         'include_ids' => [],
         'exclude_ids' => [],
-        'chunk' => 500
+        'chunk'       => 500,
+        'dry_run'     => false
     ];
 
     $o = array_merge( $defaults, $args );
 
     $result = [
-        'imported' => 0,
-        'updated'  => 0,
-        'errors'   => [],
-        'map'      => [],
+        'found_users'  => 0,
+        'imported'     => 0,
+        'updated'      => 0,
+        'remote_users' => [],
+        'errors'       => [],
+        'map'          => []
     ];
 
     $ext = get_external_wpdb();
@@ -73,7 +76,7 @@ function import_remote_users( array $args ) : array {
 
     if ( $include ) {
         $place = implode( ',', array_fill( 0, count( $include ), '%d' ) );
-        $clauses[] = "u.ID IN ($place";
+        $clauses[] = "u.ID IN ($place)";
         $params = array_merge( $params, $include );
     }
 
@@ -93,13 +96,15 @@ function import_remote_users( array $args ) : array {
     $remote_ids = $ext->get_col( $ids_stmt );
     $remote_ids = array_values( array_map( 'intval', (array) $remote_ids ) );
 
+    $result['found_users'] = count( $remote_ids );
+
     if ( ! $remote_ids ) {
         return $result;
     }
 
     $chunk             = max( 1, (int) $o['chunk'] );
     $local_blog_prefix = $wpdb->get_blog_prefix( 0 );
-    $blog_id    = $o['blog_id'] ? (int) $o['blog_id'] : null;
+    $blog_id           = $o['blog_id'] ? (int) $o['blog_id'] : null;
 
     $off_email_filters();
 
@@ -153,89 +158,97 @@ function import_remote_users( array $args ) : array {
                     $target_user_id = (int) $exists_by_login->ID;
                 }
 
-                // Usuário não existe no WP local, cria
-                if ( $target_user_id <= 0 ) {
-                    $userdata = [
-                        'user_login'    => $login,
-                        'user_email'    => $email,
-                        'user_nicename' => (string) $u['user_nicename'],
-                        'user_url'      => (string) $u['user_url'],
-                        'display_name'  => (string) $u['display_name'],
-                        'user_pass'     => wp_generate_password( 20, true, true ),
-                        'role'          => ''
-                    ];
+                $result['remote_users'][] = [
+                    'ID'    => $rid,
+                    'login' => $login,
+                    'email' => $email
+                ];
 
-                    if ( ! empty( $u['user_registered'] ) ) {
-                        $userdata['user_registered'] = $u['user_registered'];
-                    }
+                if ( ! $o['dry_run'] ) {
+                    // Usuário não existe no WP local, cria
+                    if ( $target_user_id <= 0 ) {
+                        $userdata = [
+                            'user_login'    => $login,
+                            'user_email'    => $email,
+                            'user_nicename' => (string) $u['user_nicename'],
+                            'user_url'      => (string) $u['user_url'],
+                            'display_name'  => (string) $u['display_name'],
+                            'user_pass'     => wp_generate_password( 20, true, true ),
+                            'role'          => ''
+                        ];
 
-                    $new_id = wp_insert_user( $userdata );
+                        if ( ! empty( $u['user_registered'] ) ) {
+                            $userdata['user_registered'] = $u['user_registered'];
+                        }
 
-                    if ( is_wp_error( $new_id ) ) {
-                        $result['errors'][$rid] = 'Erro ao criar usuário local: ' . $new_id->get_error_message();
-                        continue;
-                    }
+                        $new_id = wp_insert_user( $userdata );
 
-                    $target_user_id = (int) $new_id;
-                    $is_new = true;
-
-                    $wpdb->update(
-                        $wpdb->users,
-                        [
-                            'user_pass'           => (string) $u['user_pass'],
-                            'user_activation_key' => (string) $u['user_activation_key'],
-                            'user_status'         => (int) $u['user_status']
-                        ],
-                        ['ID' => $target_user_id],
-                        ['%s', '%s', '%d'],
-                        ['%d']
-                    );
-
-                    clean_user_cache( $target_user_id );
-                } else { // Atualiza usuário encontrado no local
-                    $update_data = [
-                        'ID'            => $target_user_id,
-                        'user_nicename' => (string) $u['user_nicename'],
-                        'user_url'      => (string) $u['user_url'],
-                        'display_name'  => (string) $u['display_name']
-                    ];
-
-                    $up = wp_update_user( $update_data );
-
-                    if ( is_wp_error( $up ) ) {
-                        $result['errors'][$rid] = 'Erro ao atualizar usuário local: ' . $up->get_error_message();
-                    } else {
-                        $result['updated']++;
-                    }
-                }
-
-                $user_metas = $meta_by_user[$rid] ?? [];
-
-                if ( $user_metas ) {
-                    $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_blog_prefix, $blog_id );
-
-                    foreach( $user_metas as $m ) {
-                        $k = $m['meta_key'];
-                        $v = $m['meta_value'];
-
-                        if ( $k === '_hacklab_migration_source_id' || $k === '_hacklab_migration_source_blog' ) {
+                        if ( is_wp_error( $new_id ) ) {
+                            $result['errors'][$rid] = 'Erro ao criar usuário local: ' . $new_id->get_error_message();
                             continue;
                         }
 
-                        update_user_meta( $target_user_id, $k, maybe_unserialize( $v ) );
+                        $target_user_id = (int) $new_id;
+                        $is_new = true;
+
+                        $wpdb->update(
+                            $wpdb->users,
+                            [
+                                'user_pass'           => (string) $u['user_pass'],
+                                'user_activation_key' => (string) $u['user_activation_key'],
+                                'user_status'         => (int) $u['user_status']
+                            ],
+                            ['ID' => $target_user_id],
+                            ['%s', '%s', '%d'],
+                            ['%d']
+                        );
+
+                        clean_user_cache( $target_user_id );
+                    } else { // Atualiza usuário encontrado no local
+                        $update_data = [
+                            'ID'            => $target_user_id,
+                            'user_nicename' => (string) $u['user_nicename'],
+                            'user_url'      => (string) $u['user_url'],
+                            'display_name'  => (string) $u['display_name']
+                        ];
+
+                        $up = wp_update_user( $update_data );
+
+                        if ( is_wp_error( $up ) ) {
+                            $result['errors'][$rid] = 'Erro ao atualizar usuário local: ' . $up->get_error_message();
+                        } else {
+                            $result['updated']++;
+                        }
                     }
-                }
 
-                update_user_meta( $target_user_id, '_hacklab_migration_source_id', $rid );
+                    $user_metas = $meta_by_user[$rid] ?? [];
 
-                if ( $blog_id ) {
-                    update_user_meta( $target_user_id, '_hacklab_migration_source_blog', (int) $blog_id );
-                }
+                    if ( $user_metas ) {
+                        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_blog_prefix, $blog_id );
 
-                $result['map'][$rid] = $target_user_id;
+                        foreach( $user_metas as $m ) {
+                            $k = $m['meta_key'];
+                            $v = $m['meta_value'];
 
-                if ( $is_new ) {
-                    $result['imported']++;
+                            if ( $k === '_hacklab_migration_source_id' || $k === '_hacklab_migration_source_blog' ) {
+                                continue;
+                            }
+
+                            update_user_meta( $target_user_id, $k, maybe_unserialize( $v ) );
+                        }
+                    }
+
+                    update_user_meta( $target_user_id, '_hacklab_migration_source_id', $rid );
+
+                    if ( $blog_id ) {
+                        update_user_meta( $target_user_id, '_hacklab_migration_source_blog', (int) $blog_id );
+                    }
+
+                    $result['map'][$rid] = $target_user_id;
+
+                    if ( $is_new ) {
+                        $result['imported']++;
+                    }
                 }
             }
         }
