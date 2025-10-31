@@ -16,8 +16,6 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 function log_message( string $message, string $level = 'info' ) : void {}
 
-
-
 function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, array $only_tax = [] ): array {
     $ext = get_external_wpdb();
     if ( ! $ext || ! $post_ids ) return [];

@@ -103,6 +103,7 @@ register_deactivation_hook( __FILE__, __NAMESPACE__ . '\\plugin_deactivate' );
  */
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/resolve-tables.php';
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/external-connection.php';
+require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/users.php';
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/attachments.php';
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/functions.php';
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/settings.php';
