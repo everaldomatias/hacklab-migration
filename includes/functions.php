@@ -280,23 +280,24 @@ function remote_get_posts( array $args = [] ) {
         'id'             => 'ID',
         'number'         => 'numberposts',
         'order_by'       => 'orderby',
+        'post_modified'  => 'post_modified_gmt',
         'posts_per_page' => 'numberposts'
     ];
 
     $defaults = [
-        'post_type'   => 'post',
-        'post_status' => 'publish',
-        'numberposts' => 5,
-        'offset'      => 0,
-        'orderby'     => 'post_date',
-        'order'       => 'DESC',
-        'include'     => [],
-        'exclude'     => [],
-        'search'      => '',
-        'fields'      => 'all',
-        'blog_id'     => null,
-        'with_meta'   => false,
-        'meta_keys'   => []
+        'post_type'         => 'post',
+        'post_status'       => 'publish',
+        'numberposts'       => 5,
+        'offset'            => 0,
+        'orderby'           => 'post_date',
+        'order'             => 'DESC',
+        'include'           => [],
+        'exclude'           => [],
+        'search'            => '',
+        'fields'            => 'all',
+        'blog_id'           => null,
+        'with_meta'         => false,
+        'post_modified_gmt' => null
     ];
 
     foreach ( $args as $key => $value ) {
@@ -310,6 +311,14 @@ function remote_get_posts( array $args = [] ) {
 
     $a = wp_parse_args( $args, $defaults );
 
+    if ( ! empty( $a['post_modified'] ) && empty( $a['post_modified_gmt'] ) ) {
+        if ( is_int( $a['post_modified'] ) ) {
+            $a['post_modified_gmt'] = gmdate( 'Y-m-d H:i:s', (int) $a['post_modified'] );
+        } else {
+            $ts = strtotime( (string) $a['post_modified'] );
+            if ( $ts ) $a['post_modified_gmt'] = gmdate( 'Y-m-d H:i:s', $ts );
+        }
+    }
 
     $numberposts = max( 1, min( 100000, (int) $a['numberposts'] ) );
     $offset = max( 0, (int) $a['offset'] );
@@ -372,6 +381,16 @@ function remote_get_posts( array $args = [] ) {
         $params[] = $like;
     }
 
+    if ( ! empty( $a['post_modified_gmt'] ) ) {
+        if ( is_int( $a['post_modified_gmt'] ) ) {
+            $after = gmdate( 'Y-m-d H:i:s', (int) $a['post_modified_gmt'] );
+        } else {
+            $after = (string) $a['post_modified_gmt'];
+        }
+        $where_sql[] = 'post_modified_gmt >= %s';
+        $params[]    = $after;
+    }
+
     $where = $where_sql ? ( 'WHERE ' . implode( ' AND ', $where_sql ) ) : '';
 
     $select_cols = ( $fields === 'ids' )
@@ -383,10 +402,12 @@ function remote_get_posts( array $args = [] ) {
           FROM {$table_posts_quoted}
           {$where}
       ORDER BY {$orderby} {$order}
-         LIMIT {$numberposts} OFFSET {$offset}
+         LIMIT %d OFFSET %d
     ";
+    $params[] = $numberposts;
+    $params[] = $offset;
 
-    $prepared = $ext->prepare( $sql, $params );
+    $prepared = $ext->prepare( $sql, ...$params );
 
     if ( $fields === 'ids' ) {
         $ids = $ext->get_col( $prepared );
