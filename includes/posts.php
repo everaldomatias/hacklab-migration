@@ -16,7 +16,6 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 function import_remote_posts( array $args = [] ): array {
     $defaults = [
-        'rows'    => null,
         'fetch'   => ['numberposts' => 10],
         'media'   => true,
         'dry_run' => false,
@@ -38,7 +37,7 @@ function import_remote_posts( array $args = [] ): array {
         'rows'        => []
     ];
 
-    $rows = is_array( $options['rows'] ) ? $options['rows'] : remote_get_posts( (array) $options['fetch'] );
+    $rows = remote_get_posts( (array) $options['fetch'] );
 
     if ( is_wp_error( $rows ) ) {
         $summary['errors'][] = $rows->get_error_message();
