@@ -20,7 +20,8 @@ function import_remote_posts( array $args = [] ): array {
         'fetch'   => ['numberposts' => 10],
         'media'   => true,
         'dry_run' => false,
-        'fn'      => null
+        'fn_pre'  => null,
+        'fn_pos'  => null
     ];
 
     $options = wp_parse_args( $args, $defaults );
@@ -48,13 +49,19 @@ function import_remote_posts( array $args = [] ): array {
         return $summary;
     }
 
-    $summary['found_posts'] = count( $rows );
-    $summary['rows'] = $rows;
-
-    $blog_id = (int) ( $options['fetch']['blog_id'] ?? $args['blog_id'] ?? 1 );
+    $blog_id = (int) ( $options['fetch']['blog_id'] ?? ( $args['blog_id'] ?? 1 ) );
 
     $remote_ids = array_map( static fn( $r ) => (int) $r['ID'], $rows );
     $terms_map  = fetch_remote_terms_for_posts( $remote_ids, $blog_id );
+
+    foreach ( $rows as &$r ) {
+        $rid = (int) $r['ID'];
+        $r['remote_terms'] = $terms_map[ $rid ] ?? [];
+    }
+    unset( $r );
+
+    $summary['found_posts'] = count( $rows );
+    $summary['rows'] = $rows;
 
     foreach ( $rows as $row ) {
         $remote_id     = (int) $row['ID'];
@@ -91,6 +98,17 @@ function import_remote_posts( array $args = [] ): array {
             continue;
         }
 
+        // Com o parâmetro 'fn_pre' é possível alterar os dados do post antes de ser criado no WP local.
+        if ( ! empty( $options['fn_pre'] ) && is_callable( $options['fn_pre'] ) ) {
+            $row['blog_id'] = $blog_id;
+
+            try {
+                ( $options['fn_pre'] )( $postarr, $options );
+            } catch (\Throwable $e) {
+                $summary['errors'][] = "fn_pre ({$row['ID']}): " . $e->getMessage();
+            }
+        }
+
         if ( $is_update ) {
             $postarr['ID'] = $existing;
             $local_id = (int) wp_update_post( $postarr, true );
@@ -116,19 +134,19 @@ function import_remote_posts( array $args = [] ): array {
             $summary['imported']++;
         }
 
-        $row_terms = $terms_map[$remote_id] ?? [];
+        $row_terms = $row['remote_terms'] ?? [];
         ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms );
 
-        if ( ! empty( $options['fn'] ) && is_callable( $options['fn'] ) ) {
+        // Com o parâmetro 'fn_pos' é possível alterar os dados do post depois de ser criado no WP local.
+        if ( ! empty( $options['fn_pos'] ) && is_callable( $options['fn_pos'] ) ) {
             $row['blog_id'] = $blog_id;
 
             try {
-                ( $options['fn'])( $local_id, $row, $is_update, $options['dry_run'] );
+                ( $options['fn_pos'])( $local_id, $row, $is_update, $options['dry_run'] );
             } catch (\Throwable $e) {
-                $summary['errors'][] = "fn ({$local_id}): " . $e->getMessage();
+                $summary['errors'][] = "fn_pos ({$local_id}): " . $e->getMessage();
             }
         }
-
 
         $summary['map'][$remote_id] = $local_id;
     }

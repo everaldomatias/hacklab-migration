@@ -18,48 +18,83 @@ function log_message( string $message, string $level = 'info' ) : void {}
 
 function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, array $only_tax = [] ): array {
     $ext = get_external_wpdb();
-    if ( ! $ext || ! $post_ids ) return [];
-
-    $creds = get_credentials();
-    $tables = resolve_remote_terms_tables( $creds, $blog_id );
+    if ( ! $ext ) return [];
 
     $post_ids = array_values( array_unique( array_map( 'intval', $post_ids ) ) );
     if ( ! $post_ids ) return [];
 
-    $ph_ids = implode( ',', array_fill( 0, count( $post_ids ), '%d' ) );
-    $params = $post_ids;
+    $creds  = get_credentials();
+    $tables = resolve_remote_terms_tables( $creds, $blog_id );
 
-    $sql = "
-        SELECT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug
-          FROM {$tables['term_taxonomy']} tt
-          JOIN {$tables['term_relationships']} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
-          JOIN {$tables['terms']} t ON t.term_id = tt.term_id
-         WHERE tr.object_id IN ({$ph_ids})
-    ";
+    $only_tax = array_values(
+        array_filter(
+            array_map( 'strval', $only_tax ),
+            static fn( $v ) => $v !== ''
+        )
+    );
 
-    if ( $only_tax ) {
-        $only_tax = array_values( array_filter( array_map( 'strval', $only_tax ), static fn( $v ) => $v !== '' ) );
+    $chunk_size = 500;
+    $out = [];
+
+    for ( $i = 0, $n = count( $post_ids ); $i < $n; $i += $chunk_size ) {
+        $slice   = array_slice( $post_ids, $i, $chunk_size );
+        $ph_ids  = implode( ',', array_fill( 0, count( $slice ), '%d' ) );
+        $params  = $slice;
+
+        $sql = "
+            SELECT DISTINCT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug
+              FROM {$tables['term_taxonomy']} tt
+              JOIN {$tables['term_relationships']} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+              JOIN {$tables['terms']} t ON t.term_id = tt.term_id
+             WHERE tr.object_id IN ({$ph_ids})
+        ";
+
         if ( $only_tax ) {
-            $ph_tx = implode( ',', array_fill( 0, count( $only_tax ), '%s' ) );
-            $sql  .= " AND tt.taxonomy IN ({$ph_tx})";
+            $ph_tx  = implode( ',', array_fill( 0, count( $only_tax ), '%s' ) );
+            $sql   .= " AND tt.taxonomy IN ({$ph_tx})";
             $params = array_merge( $params, $only_tax );
+        }
+
+        $prepared = $ext->prepare( $sql, ...$params );
+
+        if ( $prepared === null ) {
+            $ids_str = implode( ',', array_map( 'intval', $slice ) );
+            $sql_fallback = "
+                SELECT DISTINCT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug
+                  FROM {$tables['term_taxonomy']} tt
+                  JOIN {$tables['term_relationships']} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                  JOIN {$tables['terms']} t ON t.term_id = tt.term_id
+                 WHERE tr.object_id IN ({$ids_str})
+            ";
+
+            if ( $only_tax ) {
+                $tx_esc = implode( ',', array_map(
+                    static fn($tx) => "'" . esc_sql( $tx ) . "'",
+                    $only_tax
+                ) );
+                $sql_fallback .= " AND tt.taxonomy IN ({$tx_esc})";
+            }
+
+            $prepared = $sql_fallback;
+        }
+
+        $prepared .= " ORDER BY tr.object_id ASC, tt.taxonomy ASC, t.name ASC";
+
+        $rows = $ext->get_results( $prepared, ARRAY_A ) ?: [];
+        foreach ( $rows as $r ) {
+            $pid = (int) ( $r['post_id'] ?? 0 );
+            if ( $pid <= 0 ) { continue; }
+            $tx  = (string) ( $r['taxonomy'] ?? '' );
+            if ( $tx === '' ) { continue; }
+
+            $out[ $pid ][ $tx ][] = [
+                'term_id' => (int) ( $r['term_id'] ?? 0 ),
+                'name'    => (string) ( $r['name']    ?? '' ),
+                'slug'    => (string) ( $r['slug']    ?? '' ),
+            ];
         }
     }
 
-    $prepared = $ext->prepare( $sql, $params );
-
-    $rows = $ext->get_results( $prepared, ARRAY_A ) ?: [];
-
-    $out = [];
-    foreach ( $rows as $r ) {
-        $pid = (int) $r['post_id'];
-        $tx  = (string) $r['taxonomy'];
-        $out[$pid][$tx][] = [
-            'term_id' => (int) $r['term_id'],
-            'name'    => (string) $r['name'],
-            'slug'    => (string) $r['slug']
-        ];
-    }
     return $out;
 }
 
@@ -68,32 +103,104 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
 
     $allowed_tax = array_fill_keys( get_object_taxonomies( $post_type, 'names' ), true );
 
+    static $term_cache = [];
+
     foreach ( $terms_by_tax as $remote_tax => $term_list ) {
         $local_tax = $tax_map[$remote_tax] ?? $remote_tax;
 
-        if ( ! taxonomy_exists( $local_tax ) || empty( $allowed_tax[$local_tax] ) ) {
+        if ( ! taxonomy_exists( $local_tax ) || empty( $allowed_tax[ $local_tax ] ) ) {
+            continue;
+        }
+
+        if ( ! is_array( $term_list ) || ! $term_list ) {
             continue;
         }
 
         $to_set = [];
         foreach ( $term_list as $t ) {
-            $slug = sanitize_title( $t['slug'] ?: $t['name'] );
-            $name = $t['name'];
+            $name = (string) ( $t['name'] ?? '' );
+            $slug = (string) ( $t['slug'] ?? '' );
+
+            if ( $slug === '' && $name !== '' ) {
+                $slug = sanitize_title( $name );
+            }
+            if ( $slug === '' && $name === '' ) {
+                continue;
+            }
+
+            if ( isset( $term_cache[ $local_tax ][ $slug ] ) ) {
+                $to_set[] = (int) $term_cache[ $local_tax ][ $slug ];
+                continue;
+            }
 
             $exists = term_exists( $slug, $local_tax );
-            if ( ! $exists ) {
-                $ins = wp_insert_term( $name, $local_tax, ['slug' => $slug] );
-                if ( ! is_wp_error( $ins ) && ! empty( $ins['term_id'] ) ) {
-                    $to_set[] = (int) $ins['term_id'];
+
+            if ( ! $exists && $name !== '' ) {
+                $exists = term_exists( $name, $local_tax );
+            }
+
+            if ( $exists && ! is_wp_error( $exists ) ) {
+                $term_id = is_array( $exists ) ? (int) ( $exists['term_id'] ?? 0 ) : (int) $exists;
+                if ( $term_id > 0 ) {
+                    $term_cache[ $local_tax ][ $slug ] = $term_id;
+                    $to_set[] = $term_id;
+                    continue;
                 }
-            } else {
-                $term_id = is_array( $exists ) ? (int) $exists['term_id'] : (int) $exists;
+            }
+
+            $insert_args = [];
+
+            if ( $slug !== '' ) {
+                $insert_args['slug'] = $slug;
+            }
+
+            if ( ! empty( $t['parent_slug'] ) || ! empty( $t['parent_name'] ) ) {
+                $parent_slug = (string) ( $t['parent_slug'] ?? '' );
+                $parent_name = (string) ( $t['parent_name'] ?? '' );
+                $parent_id   = 0;
+
+                if ( $parent_slug !== '' ) {
+                    $parent_exists = term_exists( $parent_slug, $local_tax );
+                    if ( ! $parent_exists && $parent_name !== '' ) {
+                        $parent_exists = term_exists( $parent_name, $local_tax );
+                    }
+                    if ( $parent_exists && ! is_wp_error( $parent_exists ) ) {
+                        $parent_id = is_array( $parent_exists ) ? (int) ( $parent_exists['term_id'] ?? 0 ) : (int) $parent_exists;
+                    } elseif ( $parent_name !== '' ) {
+                        $parent_ins = wp_insert_term( $parent_name, $local_tax, [ 'slug' => sanitize_title( $parent_slug ?: $parent_name ) ] );
+                        if ( ! is_wp_error( $parent_ins ) ) {
+                            $parent_id = (int) ( $parent_ins['term_id'] ?? 0 );
+                        }
+                    }
+                }
+                if ( $parent_id > 0 ) {
+                    $insert_args['parent'] = $parent_id;
+                }
+            }
+
+            $ins = wp_insert_term( $name !== '' ? $name : $slug, $local_tax, $insert_args );
+            if ( ! is_wp_error( $ins ) && ! empty( $ins['term_id'] ) ) {
+                $term_id = (int) $ins['term_id'];
+                $term_cache[ $local_tax ][ $slug ] = $term_id;
                 $to_set[] = $term_id;
             }
         }
 
         if ( $to_set ) {
-            wp_set_object_terms( $post_id, array_values( array_unique( $to_set ) ), $local_tax, false );
+            $to_set = array_values( array_unique( array_map( 'intval', $to_set ) ) );
+            sort( $to_set );
+
+            $current_ids = wp_get_object_terms( $post_id, $local_tax, [ 'fields' => 'ids' ] );
+            if ( is_wp_error( $current_ids ) ) {
+                $current_ids = [];
+            } else {
+                $current_ids = array_map( 'intval', (array) $current_ids );
+                sort( $current_ids );
+            }
+
+            if ( $current_ids !== $to_set ) {
+                wp_set_object_terms( $post_id, $to_set, $local_tax, false );
+            }
         }
     }
 }
