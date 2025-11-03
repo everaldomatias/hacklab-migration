@@ -306,3 +306,20 @@ function normalize_remote_usermetas_for_target( array $metas, string $local_blog
 
     return $out;
 }
+
+function get_user_by_meta_data( $meta_key, $meta_value ) {
+    $user_query = new \WP_User_Query(
+        [
+            'meta_key'   =>	$meta_key,
+            'meta_value' =>	esc_attr( $meta_value )
+        ]
+    );
+
+    $users = $user_query->get_results();
+
+    if ( ! empty( $users ) ) {
+        return $users[0]->ID;
+    }
+
+    return '';
+}
