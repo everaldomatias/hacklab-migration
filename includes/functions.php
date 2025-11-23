@@ -11,6 +11,65 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+function run_import( array $args = [] ) : array {
+    $defaults = [
+        'fetch'             => ['numberposts' => 10],
+        'dry_run'           => false,
+        'with_media'        => true,
+        'attachments_chunk' => 500,
+        'old_uploads_base'  => '',
+        'blog_id'           => null,
+        'fn_pre'            => null,
+        'fn_pos'            => null
+    ];
+
+    $options = wp_parse_args( $args, $defaults );
+
+    $posts_summary = import_remote_posts( [
+        'fetch'   => $options['fetch'],
+        'media'   => $options['with_media'],
+        'dry_run' => $options['dry_run'],
+        'fn_pre'  => $options['fn_pre'],
+        'fn_pos'  => $options['fn_pos']
+    ] );
+
+    $rows = $posts_summary['rows'] ?? [];
+    $map  = $posts_summary['map'] ?? [];
+
+    $blog_id = (int) ( $options['blog_id'] ?? ( $options['fetch']['blog_id'] ?? 1 ) );
+
+    $attachments_summary = [
+        'content_rewritten' => 0,
+        'errors'            => [],
+        'found_posts'       => 0,
+        'map'               => [],
+        'missing_files'     => [],
+        'registered'        => 0,
+        'reused'            => 0,
+        'thumbnails_set'    => 0
+    ];
+
+    if ( $options['with_media'] && $rows && ! $options['dry_run'] ) {
+        $attachments_summary = import_remote_attachments( [
+            'blog_id'          => $blog_id,
+            'chunk'            => (int) $options['attachments_chunk'],
+            'dry_run'          => $options['dry_run'],
+            'local_map'        => $map,
+            'old_uploads_base' => (string) $options['old_uploads_base'],
+            'rows'             => $rows
+        ] );
+    }
+
+    return [
+        'posts'       => $posts_summary,
+        'attachments' => $attachments_summary,
+        'errors'      => array_merge(
+            (array) ( $posts_summary['errors'] ?? [] ),
+            (array) ( $attachments_summary['errors'] ?? [] )
+        )
+    ];
+}
+
 /**
  * Log message with context
  */
@@ -296,7 +355,7 @@ function remote_get_posts( array $args = [] ) {
         'search'            => '',
         'fields'            => 'all',
         'blog_id'           => null,
-        'with_meta'         => false,
+        'with_meta'         => true,
         'meta_keys'         => [],
         'post_modified_gmt' => null
     ];

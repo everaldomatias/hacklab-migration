@@ -21,8 +21,8 @@ class Commands {
         }
     }
 
-    // wp import-remote-posts q:post_type=post q:numberposts=20 dry_run=1
-    static function cmd_import_remote_posts( $args, $command_args ) {
+    // wp run-import q:post_type=post q:numberposts=20 dry_run=1
+    static function cmd_run_import( $args, $command_args ) {
         if ( empty( $command_args ) && ! empty( $args ) ) {
             foreach ( $args as $arg ) {
                 $parts = explode( '=', $arg, 2 );
@@ -132,6 +132,13 @@ class Commands {
                     }
                     break;
 
+                case 'old_uploads_base':
+                case 'old-uploads-base':
+                    if ( is_string( $argument_value ) && $argument_value !== '' ) {
+                        $options['old_uploads_base'] = $argument_value;
+                    }
+                    break;
+
                 default:
                     break;
             }
@@ -154,8 +161,8 @@ class Commands {
             \WP_CLI::error( sprintf( 'callback_pos não é callable: %s', $options['fn_pos'] ) );
         }
 
-        \WP_CLI::log( 'Iniciando import_remote_posts()...' );
-        $summary = import_remote_posts( $options );
+        \WP_CLI::log( 'Iniciando run_import()...' );
+        $summary = run_import( $options );
 
         if ( ! empty( $summary['errors'] ) && is_array( $summary['errors'] ) ) {
             foreach ( $summary['errors'] as $err ) {
@@ -163,20 +170,46 @@ class Commands {
             }
         }
 
-        $found      = (int) ( $summary['found_posts'] ?? 0 );
-        $imported   = (int) ( $summary['imported'] ?? 0 );
-        $updated    = (int) ( $summary['updated'] ?? 0 );
-        $skipped    = (int) ( $summary['skipped'] ?? 0 );
-        $attachments= (int) ( $summary['attachments'] ?? 0 );
+        $posts = $summary['posts'] ?? [];
+        $attachments = $summary['attachments'] ?? [];
 
-        \WP_CLI::log( sprintf(
-            "Resumo: found=%d, imported=%d, updated=%d, skipped=%d, attachments=%d",
-            $found,
-            $imported,
-            $updated,
-            $skipped,
-            $attachments
-        ) );
+        $posts_data = [
+            'found_posts' => (int) ( $posts['found_posts'] ?? 0 ),
+            'imported'    => (int) ( $posts['imported'] ?? 0 ),
+            'updated'     => (int) ( $posts['updated'] ?? 0 ),
+            'skipped'     => (int) ( $posts['skipped'] ?? 0 ),
+        ];
+
+        $attachments_data = [
+            'content_rewritten' => $attachments['content_rewritten'] ?? 0,
+            'found_posts'       => $attachments['found_posts'] ?? 0,
+            'registered'        => $attachments['registered'] ?? 0,
+            'reused'            => $attachments['reused'] ?? 0,
+            'thumbnails_set'    => $attachments['thumbnails_set'] ?? 0,
+            'missing_files'     => implode( ', ', $attachments['missing_files'] ?? [] ),
+        ];
+
+        $separator = str_repeat('#', 59);
+
+        \WP_CLI::line();
+        \WP_CLI::line( $separator );
+        \WP_CLI::line('Posts:');
+
+        foreach ( $posts_data as $label => $value ) {
+            \WP_CLI::log(sprintf('%s: %s', $label, $value));
+        }
+
+        \WP_CLI::line( $separator );
+        \WP_CLI::line();
+        \WP_CLI::line( $separator );
+        \WP_CLI::line('Attachments:');
+
+        foreach ( $attachments_data as $label => $value ) {
+            \WP_CLI::log( sprintf( '%s: %s', $label, $value ) );
+        }
+
+        \WP_CLI::line( $separator );
+        \WP_CLI::line();
 
         if ( ! empty( $summary['map'] ) && is_array( $summary['map'] ) ) {
             \WP_CLI::log( 'Map (remote_id => local_id):' );
