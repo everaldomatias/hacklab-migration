@@ -103,7 +103,7 @@ function import_remote_posts( array $args = [] ): array {
 
             try {
                 ( $options['fn_pre'] )( $postarr, $options );
-            } catch (\Throwable $e) {
+            } catch ( \Throwable $e ) {
                 $summary['errors'][] = "fn_pre ({$row['ID']}): " . $e->getMessage();
             }
         }

@@ -109,3 +109,4 @@ require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/posts.php';
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/attachments.php';
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/functions.php';
 require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/settings.php';
+require_once HACKLAB_MIGRATION_DIR_PATH . 'includes/cli.php';
