@@ -297,6 +297,7 @@ function remote_get_posts( array $args = [] ) {
         'fields'            => 'all',
         'blog_id'           => null,
         'with_meta'         => false,
+        'meta_keys'         => [],
         'post_modified_gmt' => null
     ];
 
