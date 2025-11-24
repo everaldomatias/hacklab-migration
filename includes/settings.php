@@ -34,6 +34,15 @@ function add_admin_menu() {
         HACKLAB_MIGRATION_MENU_SLUG,
         __NAMESPACE__ . '\\render_settings_page'
     );
+
+    add_submenu_page(
+        'hacklab-migration',
+        __( 'Metadados', 'hacklabr' ),
+        __( 'Metadados', 'hacklabr' ),
+        HACKLAB_MIGRATION_CAP,
+        'hacklab-migration-remote-meta',
+        __NAMESPACE__ . '\\render_remote_meta_page'
+    );
 }
 
 /**
@@ -173,6 +182,144 @@ function render_settings_page() {
     </div>
     <?php
 }
+
+/**
+ * -------------------------------------------------------------------------
+ *  Renderiza página de listagem de meta_keys remotas
+ * -------------------------------------------------------------------------
+ */
+function render_remote_meta_page() {
+    if ( ! current_user_can( HACKLAB_MIGRATION_CAP ) ) {
+        wp_die( esc_html__( 'Sem permissão.', 'hacklabr' ) );
+    }
+
+    $notice_key = 'hm_remote_meta';
+
+    $post_type = '';
+    $blog_id   = 1;
+    $meta_keys = [];
+
+    if ( isset( $_POST['hm_meta_submit'] ) ) {
+        check_admin_referer( HACKLAB_MIGRATION_NONCE_ACTION );
+
+        $post_type = isset( $_POST['hm_meta_post_type'] )
+            ? sanitize_key( wp_unslash( $_POST['hm_meta_post_type'] ) )
+            : '';
+
+        $blog_id = isset( $_POST['hm_meta_blog_id'] )
+            ? (int) $_POST['hm_meta_blog_id']
+            : 1;
+
+        if ( $post_type === '' ) {
+            add_settings_error(
+                $notice_key,
+                'missing_post_type',
+                __( 'Informe um post type válido.', 'hacklabr' ),
+                'error'
+            );
+        } else {
+            $meta_keys = get_remote_meta_keys( $post_type, $blog_id );
+
+            if ( empty( $meta_keys ) ) {
+                add_settings_error(
+                    $notice_key,
+                    'empty_meta_keys',
+                    __( 'Nenhuma meta key encontrada para os parâmetros informados.', 'hacklabr' ),
+                    'info'
+                );
+            } else {
+                add_settings_error(
+                    $notice_key,
+                    'meta_keys_loaded',
+                    sprintf(
+                        __( 'Consulta executada com sucesso. %d meta keys encontradas.', 'hacklabr' ),
+                        count( $meta_keys )
+                    ),
+                    'updated'
+                );
+            }
+        }
+    }
+    ?>
+    <div class="wrap">
+        <h1><?php echo esc_html__( 'Migração — Metadados remotos', 'hacklabr' ); ?></h1>
+
+        <?php settings_errors( $notice_key ); ?>
+
+        <p class="description">
+            <?php esc_html_e( 'Use esta ferramenta para inspecionar as meta keys usadas em um post type no WordPress externo configurado na aba "Banco de dados externo".', 'hacklabr' ); ?>
+        </p>
+
+        <form method="post" action="">
+            <?php wp_nonce_field( HACKLAB_MIGRATION_NONCE_ACTION ); ?>
+
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row">
+                        <label for="hm_meta_post_type"><?php esc_html_e( 'Post type remoto', 'hacklabr' ); ?></label>
+                    </th>
+                    <td>
+                        <input
+                            name="hm_meta_post_type"
+                            id="hm_meta_post_type"
+                            type="text"
+                            class="regular-text"
+                            value="<?php echo esc_attr( $post_type ); ?>"
+                            placeholder="post, page, product..."
+                        >
+                        <p class="description">
+                            <?php esc_html_e( 'Informe o post type existente no site remoto (ex: post, page, product).', 'hacklabr' ); ?>
+                        </p>
+                    </td>
+                </tr>
+
+                <tr>
+                    <th scope="row">
+                        <label for="hm_meta_blog_id"><?php esc_html_e( 'Blog ID remoto', 'hacklabr' ); ?></label>
+                    </th>
+                    <td>
+                        <input
+                            name="hm_meta_blog_id"
+                            id="hm_meta_blog_id"
+                            type="number"
+                            class="small-text"
+                            value="<?php echo (int) $blog_id; ?>"
+                            min="1"
+                        >
+                        <p class="description">
+                            <?php esc_html_e( 'Em instalações multisite, corresponde ao ID do site (wp_2_, wp_3_...). Em single site, use 1.', 'hacklabr' ); ?>
+                        </p>
+                    </td>
+                </tr>
+            </table>
+
+            <?php submit_button( __( 'Consultar meta keys remotas', 'hacklabr' ), 'secondary', 'hm_meta_submit' ); ?>
+        </form>
+
+        <?php if ( ! empty( $meta_keys ) ) : ?>
+            <hr>
+            <h2>
+                <?php
+                printf(
+                    esc_html__( 'Meta keys encontradas (%d)', 'hacklabr' ),
+                    count( $meta_keys )
+                );
+                ?>
+            </h2>
+
+            <p class="description">
+                <?php esc_html_e( 'A lista abaixo é apenas para referência visual. Você pode copiá-la e usar em mapeamentos de migração.', 'hacklabr' ); ?>
+            </p>
+
+            <textarea
+                readonly
+                style="width:100%;max-width:900px;min-height:220px;font-family:monospace;"
+            ><?php echo esc_textarea( implode( "\n", $meta_keys ) ); ?></textarea>
+        <?php endif; ?>
+    </div>
+    <?php
+}
+
 
 /**
  * -------------------------------------------------------------------------
