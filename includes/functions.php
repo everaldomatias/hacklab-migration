@@ -619,3 +619,49 @@ function get_remote_meta_keys( string $post_type, int $blog_id = 1 ): array {
 
     return $keys;
 }
+
+/**
+ * Obtém a lista de post types existentes no banco de dados remoto.
+ *
+ * @since 0.0.1
+ *
+ * @version 1.0.0
+ *
+ * @param int $blog_id
+ *     ID do blog remoto em instalações multisite. Deve ser maior ou igual a 1.
+ *     Em instalações single site, normalmente o valor é 1.
+ *
+ * @return string[]
+ *     Array contendo os nomes dos post types disponíveis no WordPress externo.
+ *     Retorna um array vazio caso a conexão falhe, a tabela não exista ou
+ *     nenhum post type seja encontrado.
+ */
+function get_remote_post_types( int $blog_id ): array {
+    $ext = get_external_wpdb();
+
+    if ( ! $ext instanceof \wpdb || $blog_id < 1 ) {
+        return [];
+    }
+
+    $creds = get_credentials();
+    $posts_table = resolve_remote_posts_table( $creds, $blog_id );
+
+    if ( ! $posts_table ) {
+        return [];
+    }
+
+    $sql = "
+        SELECT DISTINCT post_type
+        FROM {$posts_table}
+        WHERE post_type NOT LIKE '\\_%'
+        ORDER BY post_type ASC
+    ";
+
+    $types = $ext->get_col( $sql );
+
+    if ( ! is_array( $types ) ) {
+        return [];
+    }
+
+    return array_values( array_filter( array_map( 'sanitize_key', $types ) ) );
+}
