@@ -549,3 +549,73 @@ function build_uploads_url_map( string $old_base, string $new_base, ?int $remote
 
     return $pairs;
 }
+
+
+/**
+ * Obtém todas as meta keys únicas utilizadas por um post type no banco de dados remoto.
+ *
+ * Em caso de erro na execução da consulta SQL, o erro é registrado através da action "logger".
+ *
+ * @since 0.0.1
+ *
+ * @version 1.0.0
+ *
+ * @param string $post_type
+ *     O post type cujas meta keys devem ser buscadas no banco remoto.
+ *     Caso seja passado vazio, a função retorna um array vazio.
+ *
+ * @param int $blog_id
+ *     ID do blog remoto em instalações multisite. Usado para resolver as tabelas
+ *     corretas (`wp_X_posts` e `wp_X_postmeta`).
+ *     Padrão: 1.
+ *
+ * @return string[]
+ *     Um array contendo meta keys únicas associadas ao post_type informado.
+ *     Retorna um array vazio caso não seja possível conectar, resolver tabelas
+ *     ou caso nenhuma meta key seja encontrada.
+ */
+function get_remote_meta_keys( string $post_type, int $blog_id = 1 ): array {
+    if ( $post_type === '' ) {
+        return [];
+    }
+
+    $ext = get_external_wpdb();
+
+    if ( ! $ext instanceof \wpdb ) {
+        return [];
+    }
+
+    $creds = get_credentials();
+
+    $posts_table    = resolve_remote_posts_table( $creds, $blog_id );
+    $postmeta_table = resolve_remote_postmeta_table( $creds, $blog_id );
+
+    if ( ! $posts_table || ! $postmeta_table ) {
+        return [];
+    }
+
+    $sql = "
+        SELECT DISTINCT pm.meta_key
+        FROM {$postmeta_table} AS pm
+        INNER JOIN {$posts_table} AS p
+            ON p.ID = pm.post_id
+        WHERE p.post_type = %s
+        ORDER BY pm.meta_key ASC
+    ";
+
+    $prepared = $ext->prepare( $sql, $post_type );
+    $keys = $ext->get_col( $prepared );
+
+    if ( $ext->last_error ) {
+        add_action( 'logger', [ 'context' => 'get_remote_meta_keys', 'error' => $ext->last_error ] );
+    }
+
+    if ( ! is_array( $keys ) ) {
+        return [];
+    }
+
+    $keys = array_filter( array_map( 'strval', $keys ) );
+    $keys = array_values( array_unique( $keys ) );
+
+    return $keys;
+}
