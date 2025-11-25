@@ -85,10 +85,16 @@ function import_remote_posts( array $args = [] ): array {
 
         $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
 
-        $postarr['meta_input'] = $post_meta;
+        $postarr['meta_input'] = [];
         $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
         $postarr['meta_input']['_hacklab_migration_source_meta']['post_type'] = $remote_type;
         $postarr['meta_input']['_hacklab_migration_last_update'] = time();
+
+        if ( ! empty( $post_meta['_edit_last'] ) ) {
+            $post_meta['_edit_last'] = get_user_by_meta_data( '_hacklab_migration_source_id', $post_meta['_edit_last'] ) ?? 0;
+        }
+
+        $postarr['meta_input'] = array_merge( $post_meta, $postarr['meta_input'] );
 
         // Dry-run
         if ( $options['dry_run'] ) {
