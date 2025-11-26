@@ -93,3 +93,27 @@ function resolve_remote_terms_tables( array $creds, ?int $blog_id ): array {
     ];
 }
 
+/**
+ * Resolve o nome da tabela `users` remota, considerando instalação multisite.
+ *
+ * - Para single-site ou blog ID 1, retorna: `wp_users` (ou outro prefixo customizado).
+ * - Para multisite, a tabela `users` é compartilhada e não inclui o ID do blog.
+ *
+ * @since 1.0.0
+ *
+ * @param array $creds Credenciais ou configurações da instalação remota.
+ *                     Espera-se que contenha:
+ *                     - 'prefix' (string): prefixo das tabelas (padrão: 'wp_').
+ *
+ * @return string       Nome da tabela `users` remota apropriada.
+ */
+function resolve_remote_users_table( array $creds ): string {
+    $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+    return $prefix . 'users';
+}
+
+function resolve_remote_usermeta_table( array $creds ): string {
+    $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+    return $prefix . 'usermeta';
+}
+

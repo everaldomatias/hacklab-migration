@@ -40,9 +40,9 @@ function import_remote_users( array $args ) : array {
         return $result;
     }
 
-    $remote_prefix = $ext->prefix;
-    $t_users       = $remote_prefix . 'users';
-    $t_usermeta    = $remote_prefix . 'usermeta';
+    $creds      = get_credentials();
+    $t_users    = resolve_remote_users_table( $creds );
+    $t_usermeta = resolve_remote_usermeta_table( $creds );
 
     $include = array_values( array_unique( array_map( 'intval', (array) $o['include_ids'] ) ) );
     $exclude = array_values( array_unique( array_map( 'intval', (array) $o['exclude_ids'] ) ) );
@@ -68,10 +68,14 @@ function import_remote_users( array $args ) : array {
 
     if ( $o['blog_id'] ) {
         $rbid = (int) $o['blog_id'];
+
+        $base_prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+        $cap_meta_key = sprintf( '%s%d_capabilities', $base_prefix, $rbid );
+
         $ids_sql .= " INNER JOIN {$t_usermeta} um
                         ON um.user_id = u.ID
                     AND um.meta_key = %s";
-        $params[] = "wp_{$rbid}_capabilities";
+        $params[] = $cap_meta_key;
     }
 
     if ( $include ) {
@@ -307,19 +311,191 @@ function normalize_remote_usermetas_for_target( array $metas, string $local_blog
     return $out;
 }
 
-function get_user_by_meta_data( $meta_key, $meta_value ) {
+function get_user_by_meta_data( string $meta_key, $meta_value ): int {
+    static $cache = [];
+
+    $meta_value = trim( (string) $meta_value );
+
+    if ( $meta_value === '' ) {
+        return 0;
+    }
+
+    $cache_key = $meta_key . '|' . $meta_value;
+
+    if ( array_key_exists( $cache_key, $cache ) ) {
+        return (int) $cache[ $cache_key ];
+    }
+
     $user_query = new \WP_User_Query(
         [
-            'meta_key'   =>	$meta_key,
-            'meta_value' =>	esc_attr( $meta_value )
+            'meta_key'   => $meta_key,
+            'meta_value' => $meta_value,
+            'number'     => 1,
+            'fields'     => 'ID'
         ]
     );
 
     $users = $user_query->get_results();
 
-    if ( ! empty( $users ) ) {
-        return $users[0]->ID;
+    if ( empty( $users ) ) {
+        $cache[ $cache_key ] = 0;
+        return 0;
     }
 
-    return '';
+    $user_id = (int) $users[0];
+    $cache[ $cache_key ] = $user_id;
+
+    return (int) $user_id;
+}
+
+function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dry_run = false ): int {
+    global $wpdb;
+
+    $ext = get_external_wpdb();
+    if ( ! $ext instanceof \wpdb ) return 0;
+
+    $creds = get_credentials();
+
+    $t_users    = resolve_remote_users_table( $creds );
+    $t_usermeta = resolve_remote_usermeta_table( $creds );
+
+    $user_sql = "
+        SELECT * FROM {$t_users} u
+        WHERE u.ID = %d
+        LIMIT 1
+    ";
+
+    $u = $ext->get_row( $ext->prepare( $user_sql, $remote_user_id ), ARRAY_A );
+
+    if ( ! $u ) return 0;
+
+    $rid = (int) $u['ID'];
+    $login = (string) $u['user_login'];
+    $email = (string) $u['user_email'];
+
+
+    $meta_sql = "
+        SELECT um.user_id, um.meta_key, um.meta_value
+        FROM {$t_usermeta} um
+        WHERE um.user_id = %d
+        ORDER BY um.umeta_id ASC
+    ";
+
+    $meta_rows = $ext->get_results( $ext->prepare( $meta_sql, $rid ), ARRAY_A ) ?: [];
+    $user_metas = [];
+
+    foreach ( $meta_rows as $meta ) {
+        $user_metas[] = [
+            'meta_key'   => (string) $meta['meta_key'],
+            'meta_value' => (string) $meta['meta_value']
+        ];
+    }
+
+    $local_blog_prefix = $wpdb->get_blog_prefix( 0 );
+    $target_blog_id = $blog_id ? (int) $blog_id : null;
+
+    if ( $user_metas ) {
+        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_blog_prefix, $target_blog_id );
+    }
+
+    $target_user_id = 0;
+    $exists_by_login = get_user_by( 'login', $login );
+
+    if ( $exists_by_login instanceof \WP_User ) {
+        $target_user_id = (int) $exists_by_login->ID;
+    }
+
+    if ( $dry_run ) {
+        return $target_user_id;
+    }
+
+    add_filter( 'send_password_change_email', '__return_false', 999 );
+    add_filter( 'send_email_change_email', '__return_false', 999 );
+    add_filter( 'wp_send_new_user_notification_to_admin', '__return_false', 999 );
+    add_filter( 'wp_send_new_user_notification_to_user', '__return_false', 999 );
+
+    try {
+        // Usuário não existe, cria
+        if ( $target_user_id <= 0 ) {
+            $userdata = [
+                'user_login'    => $login,
+                'user_email'    => $email,
+                'user_nicename' => (string) $u['user_nicename'],
+                'user_url'      => (string) $u['user_url'],
+                'display_name'  => (string) $u['display_name'],
+                'user_pass'     => wp_generate_password( 20, true, true ),
+                'role'          => ''
+            ];
+
+            if ( ! empty( $u['user_registered'] ) ) {
+                $userdata['user_registered'] = $u['user_registered'];
+            }
+
+            $new_id = wp_insert_user( $userdata );
+
+            if ( is_wp_error( $new_id ) ) {
+                return 0;
+            }
+
+            $target_user_id = (int) $new_id;
+
+            $wpdb->update(
+                $wpdb->users,
+                [
+                    'user_pass'           => (string) $u['user_pass'],
+                    'user_activation_key' => (string) $u['user_activation_key'],
+                    'user_status'         => (int) $u['user_status']
+                ],
+                [ 'ID' => $target_user_id ],
+                [ '%s', '%s', '%d' ],
+                [ '%d' ]
+            );
+
+            clean_user_cache( $target_user_id );
+
+        } else {
+            $update_data = [
+                'ID'            => $target_user_id,
+                'user_nicename' => (string) $u['user_nicename'],
+                'user_url'      => (string) $u['user_url'],
+                'display_name'  => (string) $u['display_name'],
+            ];
+
+            if ( ! empty( $u['user_registered'] ) ) {
+                $update_data['user_registered'] = $u['user_registered'];
+            }
+
+            $up = wp_update_user( $update_data );
+
+            if ( is_wp_error( $up ) ) {
+                return 0;
+            }
+        }
+
+        if ( $user_metas ) {
+            foreach ( $user_metas as $m ) {
+                $k = $m['meta_key'];
+                $v = $m['meta_value'];
+
+                if ( $k === '_hacklab_migration_source_id' || $k === '_hacklab_migration_source_blog' ) {
+                    continue;
+                }
+
+                update_user_meta( $target_user_id, $k, maybe_unserialize( $v ) );
+            }
+        }
+
+        update_user_meta( $target_user_id, '_hacklab_migration_source_id', $rid );
+
+        if ( $target_blog_id ) {
+            update_user_meta( $target_user_id, '_hacklab_migration_source_blog', $target_blog_id );
+        }
+    } finally {
+        remove_filter( 'send_password_change_email', '__return_false', 999 );
+        remove_filter( 'send_email_change_email', '__return_false', 999 );
+        remove_filter( 'wp_send_new_user_notification_to_admin', '__return_false', 999 );
+        remove_filter( 'wp_send_new_user_notification_to_user', '__return_false', 999 );
+    }
+
+    return (int) $target_user_id;
 }
