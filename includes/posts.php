@@ -91,13 +91,15 @@ function import_remote_posts( array $args = [] ): array {
         $postarr['meta_input']['_hacklab_migration_last_update'] = time();
 
         if ( ! empty( $post_meta['_edit_last'] ) ) {
-            $local_user_id = get_user_by_meta_data( '_hacklab_migration_source_id', $post_meta['_edit_last'] );
+            $remote_user_id = (int) $post_meta['_edit_last'];
+
+            $local_user_id = get_user_by_meta_data( '_hacklab_migration_source_id', $remote_user_id );
 
             if ( ! $local_user_id ) {
-                $local_user_id = import_remote_user( $post_meta['_edit_last'], $blog_id, false );
+                $local_user_id = import_remote_user( $remote_user_id, $blog_id, false );
             }
 
-            $post_meta['_edit_last'] = $local_user_id ?? 0;
+            $post_meta['_edit_last'] = (int) $local_user_id;
         }
 
         $postarr['meta_input'] = array_merge( $post_meta, $postarr['meta_input'] );
