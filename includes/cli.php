@@ -225,6 +225,70 @@ class Commands {
         }
     }
 
+    /**
+     * Importa um único usuário do banco remoto para o WordPress local.
+     *
+     * Essa subcomando é útil para casos em que você precisa garantir que um usuário
+     * específico exista no ambiente local — por exemplo, ao mapear autores ou o
+     * metadado `_edit_last` durante a migração de posts.
+     *
+     * ## OPTIONS
+     *
+     * <remote_user_id>
+     * : ID do usuário no banco remoto. Obrigatório.
+     *
+     * [--blog_id=<id>]
+     * : ID do blog remoto em instalações multisite. Em um multisite clássico,
+     *   esse valor corresponde ao número do site (ex.: 2, 3, 4).
+     *   Default: 1.
+     *
+     * [--dry_run]
+     * : Executa em modo de simulação. Nenhuma alteração será gravada no banco
+     *   local; o comando apenas resolve o usuário e retorna o ID que seria
+     *   utilizado.
+     *
+     * ## EXAMPLES
+     *
+     *     # Importa o usuário remoto de ID 123 do blog 1 (single site ou blog principal):
+     *     wp hacklab-migration run-import-user 123
+     *
+     *     # Importa o usuário remoto de ID 456 do blog 4 em um multisite:
+     *     wp hacklab-migration run-import-user 456 --blog_id=4
+     *
+     *     # Simula a importação do usuário remoto 789, sem gravar nada:
+     *     wp hacklab-migration run-import-user 789 --blog_id=2 --dry_run
+     *
+     * @param array $args         Argumentos posicionais (ex.: [ <remote_user_id> ]).
+     * @param array $command_args Argumentos nomeados/associativos (ex.: [ 'blog_id' => 2, 'dry_run' => true ]).
+     *
+     * @return void
+     */
+    static function cmd_run_import_user( $args, $command_args ) {
+        $defaults = [
+            'blog_id'        => 1,
+            'dry_run'        => false
+        ];
+
+        if ( empty( $args[0] ) ) {
+            \WP_CLI::error( 'Você deve informar <remote_user_id>. Ex: wp run-import-user 123 --blog_id=1' );
+        }
+
+        $remote_user_id = (int) $args[0];
+
+        $options = wp_parse_args( $command_args, $defaults );
+
+        $blog_id = (int) $options['blog_id'];
+        $dry_run = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
+
+        $result = import_remote_user( $remote_user_id, $blog_id, $dry_run );
+
+        if ( $result ) {
+            \WP_CLI::success( "Usuário importado com sucesso! ID: $result" );
+        } else {
+            \WP_CLI::error( 'Não foi possível importar o usuário.' );
+        }
+    }
+
     // Helpers
     private static function csv_or_scalar( $value ) {
         if ( is_array( $value ) ) return $value;

@@ -88,7 +88,7 @@ function import_remote_posts( array $args = [] ): array {
         $postarr['meta_input'] = [];
         $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
         $postarr['meta_input']['_hacklab_migration_source_meta']['post_type'] = $remote_type;
-        $postarr['meta_input']['_hacklab_migration_last_update'] = time();
+        $postarr['meta_input']['_hacklab_migration_last_updated'] = time();
 
         if ( ! empty( $post_meta['_edit_last'] ) ) {
             $remote_user_id = (int) $post_meta['_edit_last'];

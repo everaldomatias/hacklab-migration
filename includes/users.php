@@ -106,9 +106,9 @@ function import_remote_users( array $args ) : array {
         return $result;
     }
 
-    $chunk             = max( 1, (int) $o['chunk'] );
-    $local_blog_prefix = $wpdb->get_blog_prefix( 0 );
-    $blog_id           = $o['blog_id'] ? (int) $o['blog_id'] : null;
+    $chunk        = max( 1, (int) $o['chunk'] );
+    $local_prefix = $wpdb->get_blog_prefix( 0 );
+    $blog_id      = $o['blog_id'] ? (int) $o['blog_id'] : null;
 
     $off_email_filters();
 
@@ -228,7 +228,7 @@ function import_remote_users( array $args ) : array {
                     $user_metas = $meta_by_user[$rid] ?? [];
 
                     if ( $user_metas ) {
-                        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_blog_prefix, $blog_id );
+                        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_prefix, $blog_id );
 
                         foreach( $user_metas as $m ) {
                             $k = $m['meta_key'];
@@ -271,18 +271,18 @@ function import_remote_users( array $args ) : array {
  * - Adiciona também a variante local (ex.: 'wp_capabilities' e 'wp_user_level') baseada nas chaves do blog remoto.
  *
  * @param array<int,array{meta_key:string,meta_value:string}> $metas
- * @param string $local_blog_prefix Ex.: 'wp_'
+ * @param string $local_prefix Ex.: 'wp_'
  * @param int|null $blog_id
  * @return array<int,array{meta_key:string,meta_value:string}>
  */
-function normalize_remote_usermetas_for_target( array $metas, string $local_blog_prefix, ?int $blog_id ) : array {
+function normalize_remote_usermetas_for_target( array $metas, string $local_prefix, ?int $blog_id, string $remote_prefix = 'wp_' ) : array {
     if ( ! $blog_id || $blog_id <= 1 ) {
         return $metas;
     }
 
     $out = $metas;
-    $remote_caps_key = "wp_{$blog_id}_capabilities";
-    $remote_level_key= "wp_{$blog_id}_user_level";
+    $remote_caps_key  = sprintf( '%s%d_capabilities', $remote_prefix, $blog_id );
+    $remote_level_key = sprintf( '%s%d_user_level',   $remote_prefix, $blog_id );
 
     $caps_value  = null;
     $level_value = null;
@@ -297,13 +297,14 @@ function normalize_remote_usermetas_for_target( array $metas, string $local_blog
 
     if ( $caps_value !== null ) {
         $out[] = [
-            'meta_key'   => $local_blog_prefix . 'capabilities', // ex.: 'wp_capabilities'
+            'meta_key'   => $local_prefix . 'capabilities', // ex.: 'wp_capabilities'
             'meta_value' => $caps_value,
         ];
     }
+
     if ( $level_value !== null ) {
         $out[] = [
-            'meta_key'   => $local_blog_prefix . 'user_level',
+            'meta_key'   => $local_prefix . 'user_level',
             'meta_value' => $level_value,
         ];
     }
@@ -355,6 +356,7 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     if ( ! $ext instanceof \wpdb ) return 0;
 
     $creds = get_credentials();
+    $remote_prefix  = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
 
     $t_users    = resolve_remote_users_table( $creds );
     $t_usermeta = resolve_remote_usermeta_table( $creds );
@@ -391,11 +393,16 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
         ];
     }
 
-    $local_blog_prefix = $wpdb->get_blog_prefix( 0 );
+    $user_metas[] = [
+        'meta_key' => '_hacklab_migration_last_updated',
+        'meta_value' => time()
+    ];
+
+    $local_prefix = $wpdb->get_blog_prefix( 0 );
     $target_blog_id = $blog_id ? (int) $blog_id : null;
 
     if ( $user_metas ) {
-        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_blog_prefix, $target_blog_id );
+        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_prefix, $target_blog_id, $remote_prefix );
     }
 
     $target_user_id = 0;
