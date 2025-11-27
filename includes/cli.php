@@ -289,6 +289,128 @@ class Commands {
         }
     }
 
+    /**
+     * Importa usuários em lote do banco remoto para o WordPress local.
+     *
+     * Esse comando consome a função import_remote_users() e permite importar
+     * usuários de forma massiva, com filtros opcionais por blog (em multisite),
+     * lista de IDs a incluir e lista de IDs a excluir.
+     *
+     * ## OPTIONS
+     *
+     * [--blog_id=<id>]
+     * : ID do blog remoto em instalações multisite. Em um multisite clássico,
+     *   esse valor corresponde ao número do site (ex.: 2, 3, 4). Se omitido,
+     *   todos os usuários da tabela remota serão considerados (sem filtro
+     *   por capabilities de blog).
+     *
+     * [--include_ids=<ids>]
+     * : Lista de IDs remotos a incluir, separados por vírgula. Ex.: "10,20,30".
+     *   Se informado, apenas esses IDs serão considerados.
+     *
+     * [--exclude_ids=<ids>]
+     * : Lista de IDs remotos a excluir, separados por vírgula. Ex.: "5,6,7".
+     *
+     * [--chunk=<n>]
+     * : Tamanho do lote (chunk) de usuários processados por iteração. Útil
+     *   para controlar o consumo de memória e o tempo de execução.
+     *   Default: 500.
+     *
+     * [--dry_run]
+     * : Executa em modo de simulação. Nenhuma alteração será gravada no banco
+     *   local; o comando apenas calcula os usuários que seriam importados/
+     *   atualizados e retorna o resumo.
+     *
+     * ## EXAMPLES
+     *
+     *     # Importa todos os usuários do blog 4 (multisite remoto):
+     *     wp run-import-users --blog_id=4
+     *
+     *     # Importa apenas usuários específicos (IDs 10, 20, 30) do blog 2:
+     *     wp run-import-users --blog_id=2 --include_ids=10,20,30
+     *
+     *     # Importa todos os usuários exceto os IDs 5,6,7:
+     *     wp run-import-users --exclude_ids=5,6,7
+     *
+     *     # Executa em modo de simulação (sem gravar nada) para o blog 3:
+     *     wp run-import-users --blog_id=3 --dry_run
+     *
+     * @param array $args         Argumentos posicionais (não utilizados neste comando).
+     * @param array $command_args Argumentos nomeados/associativos (blog_id, include_ids, exclude_ids, chunk, dry_run).
+     *
+     * @return void
+     */
+    static function cmd_run_import_users( $args, $command_args ) {
+        $defaults = [
+            'blog_id'     => null,
+            'include_ids' => '',
+            'exclude_ids' => '',
+            'chunk'       => 500,
+            'dry_run'     => false
+        ];
+
+        $options = wp_parse_args( $command_args, $defaults );
+
+        $blog_id = null;
+
+        if ( ! empty( $options['blog_id'] ) ) {
+            $blog_id = (int) $options['blog_id'];
+        }
+
+        $include_ids = [];
+
+        if ( ! empty( $options['include_ids'] ) ) {
+            $include_ids = explode( ',', $$options['include_ids'] );
+            $include_ids = array_map( 'intval', $include_ids );
+        }
+
+        $exclude_ids = [];
+
+        if ( ! empty( $options['exclude_ids'] ) ) {
+            $exclude_ids = explode( ',', $$options['exclude_ids'] );
+            $exclude_ids = array_map( 'intval', $exclude_ids );
+        }
+
+        $chunk = max( 1, (int) $options['chunk'] );
+        $dry_run = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
+
+        \WP_CLI::log( 'Iniciando importação de usuários remotos...' );
+
+        if ( $dry_run ) {
+            \WP_CLI::log( 'Modo: DRY RUN (simulação, nenhuma alteração será gravada).' );
+        }
+
+        $result = import_remote_users( [
+            'blog_id'     => $blog_id,
+            'include_ids' => $include_ids,
+            'exclude_ids' => $exclude_ids,
+            'chunk'       => $chunk,
+            'dry_run'     => $dry_run
+        ] );
+
+        \WP_CLI::log( '' );
+        \WP_CLI::log( 'Resumo da importação:' );
+        \WP_CLI::log( '  Usuários encontrados no remoto: ' . (int) $result['found_users'] );
+        \WP_CLI::log( '  Usuários importados (novos):   ' . (int) $result['imported'] );
+        \WP_CLI::log( '  Usuários atualizados:          ' . (int) $result['updated'] );
+
+        if ( ! empty( $result['errors'] ) && is_array( $result['errors'] ) ) {
+            \WP_CLI::log( '' );
+            \WP_CLI::warning( 'Alguns usuários não puderam ser processados:' );
+
+            foreach ( $result['errors'] as $remote_id => $message ) {
+                // $remote_id pode ser numérico ou string, dependendo de como você preenche
+                \WP_CLI::warning( sprintf( '  [Remoto %s] %s', $remote_id, $message ) );
+            }
+        }
+
+        if ( $dry_run ) {
+            \WP_CLI::success( 'Simulação concluída. Nenhuma alteração foi gravada no banco local.' );
+        } else {
+            \WP_CLI::success( 'Importação de usuários concluída.' );
+        }
+    }
+
     // Helpers
     private static function csv_or_scalar( $value ) {
         if ( is_array( $value ) ) return $value;
