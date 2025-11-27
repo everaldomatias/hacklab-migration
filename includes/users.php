@@ -22,7 +22,7 @@ function import_remote_users( array $args ) : array {
         'dry_run'     => false
     ];
 
-    $o = array_merge( $defaults, $args );
+    $o = wp_parse_args( $args, $defaults );
 
     $result = [
         'found_users'  => 0,
@@ -40,7 +40,9 @@ function import_remote_users( array $args ) : array {
         return $result;
     }
 
-    $creds      = get_credentials();
+    $creds = get_credentials();
+    $remote_prefix  = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+
     $t_users    = resolve_remote_users_table( $creds );
     $t_usermeta = resolve_remote_usermeta_table( $creds );
 
@@ -110,7 +112,9 @@ function import_remote_users( array $args ) : array {
     $local_prefix = $wpdb->get_blog_prefix( 0 );
     $blog_id      = $o['blog_id'] ? (int) $o['blog_id'] : null;
 
-    $off_email_filters();
+    if ( ! $o['dry_run'] ) {
+        $off_email_filters();
+    }
 
     try {
         for ( $i = 0; $i < count( $remote_ids ); $i += $chunk ) {
@@ -228,7 +232,7 @@ function import_remote_users( array $args ) : array {
                     $user_metas = $meta_by_user[$rid] ?? [];
 
                     if ( $user_metas ) {
-                        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_prefix, $blog_id );
+                        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_prefix, $blog_id, $remote_prefix );
 
                         foreach( $user_metas as $m ) {
                             $k = $m['meta_key'];
@@ -248,7 +252,7 @@ function import_remote_users( array $args ) : array {
                         update_user_meta( $target_user_id, '_hacklab_migration_source_blog', (int) $blog_id );
                     }
 
-                    $result['map'][$rid] = $target_user_id;
+                    $result['map'][$rid] = (int) $target_user_id;
 
                     if ( $is_new ) {
                         $result['imported']++;
@@ -258,7 +262,9 @@ function import_remote_users( array $args ) : array {
         }
 
     } finally {
-        $restore_email_filters();
+        if ( ! $o['dry_run'] ) {
+            $restore_email_filters();
+        }
     }
 
     return $result;
