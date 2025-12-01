@@ -463,19 +463,47 @@ class Commands {
         \WP_CLI::log( "Iniciando importação de termos..." );
         $result = import_remote_terms( $args_import );
 
+        $errors_total = 0;
+        foreach ( $result['errors'] as $rid => $msgs ) {
+            if ( is_array( $msgs ) ) {
+                $errors_total += count( $msgs );
+            } elseif ( ! empty( $msgs ) ) {
+                $errors_total++;
+            }
+        }
+
         \WP_CLI::log( "" );
         \WP_CLI::line( "====================== RESULTADO ======================" );
         \WP_CLI::line( "Termos encontrados: " . $result['found_terms'] );
         \WP_CLI::line( "Importados:         " . $result['imported'] );
         \WP_CLI::line( "Atualizados:        " . $result['updated'] );
         \WP_CLI::line( "--------------------------------------------------------" );
-        \WP_CLI::line( "Erros:              " . count( $result['errors'] ) );
+        \WP_CLI::line( "Erros (mensagens):  " . $errors_total );
         \WP_CLI::line( "========================================================" );
 
         if ( ! empty( $result['errors'] ) ) {
             \WP_CLI::warning( "Erros ocorreram durante a importação:" );
-            foreach ( $result['errors'] as $rid => $msg ) {
-                \WP_CLI::warning( "Termo remoto {$rid}: {$msg}" );
+
+            foreach ( $result['errors'] as $rid => $msgs ) {
+                if ( ! is_array( $msgs ) ) {
+                    $msg = (string) $msgs;
+                    if ( $msg === '' ) {
+                        continue;
+                    }
+
+                    \WP_CLI::warning( $msg );
+                    continue;
+                }
+
+                // Caso de lista de erros para um termo remoto específico
+                foreach ( $msgs as $msg ) {
+                    $msg = (string) $msg;
+                    if ( $msg === '' ) {
+                        continue;
+                    }
+
+                    \WP_CLI::warning( "Termo remoto {$rid}: {$msg}" );
+                }
             }
         }
 
