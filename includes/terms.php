@@ -64,8 +64,6 @@ if ( ! defined( 'ABSPATH' ) ) {
  * }
  */
 function import_remote_terms( array $args ) : array {
-    global $wpdb;
-
     $defaults = [
         'blog_id'     => null,
         'taxonomies'  => [],
@@ -93,8 +91,10 @@ function import_remote_terms( array $args ) : array {
         return $result;
     }
 
+    $blog_id = $o['blog_id'] ? (int) $o['blog_id'] : 1;
+
     $creds  = get_credentials();
-    $tables = resolve_remote_terms_tables( $creds, $o['blog_id'] );
+    $tables = resolve_remote_terms_tables( $creds, $blog_id );
 
     if (
         empty( $tables['terms'] ) ||
@@ -230,7 +230,7 @@ function import_remote_terms( array $args ) : array {
                 $desc     = (string) $row['description'];
 
                 if ( ! taxonomy_exists( $taxonomy ) ) {
-                    $result['errors'][ $rid ] = "Taxonomia '{$taxonomy}' não existe no ambiente local.";
+                    $result['errors'][ $rid ][] = "Taxonomia '{$taxonomy}' não existe no ambiente local.";
                     continue;
                 }
 
@@ -239,7 +239,7 @@ function import_remote_terms( array $args ) : array {
                 $payload = [
                     'remote_term_id' => $rid,
                     'taxonomy'       => $taxonomy,
-                    'blog_id'        => $o['blog_id'] ? (int) $o['blog_id'] : null,
+                    'blog_id'        => $blog_id,
                     'term'           => [
                         'name'          => $name,
                         'slug'          => $slug,
@@ -253,7 +253,7 @@ function import_remote_terms( array $args ) : array {
                     try {
                         ( $o['fn_pre'] )( $payload, $o );
                     } catch ( \Throwable $e ) {
-                        $result['errors'][ $rid ] = 'fn_pre (term ' . $rid . '): ' . $e->getMessage();
+                        $result['errors'][ $rid ][] = 'fn_pre (term ' . $rid . '): ' . $e->getMessage();
                     }
                 }
 
@@ -286,9 +286,9 @@ function import_remote_terms( array $args ) : array {
                     if ( isset( $result['map'][ $parent_r ] ) ) {
                         $parent_local = (int) $result['map'][ $parent_r ];
                     } else {
-                        $parent_local = get_term_by_meta_data(
-                            '_hacklab_migration_source_id',
+                        $parent_local = find_local_term(
                             $parent_r,
+                            $blog_id,
                             $taxonomy
                         );
                     }
@@ -318,7 +318,7 @@ function import_remote_terms( array $args ) : array {
                     $insert = wp_insert_term( $name, $taxonomy, $insert_args );
 
                     if ( is_wp_error( $insert ) ) {
-                        $result['errors'][ $rid ] = 'Erro ao criar termo local: ' . $insert->get_error_message();
+                        $result['errors'][ $rid ][] = 'Erro ao criar termo local: ' . $insert->get_error_message();
                         continue;
                     }
 
@@ -339,7 +339,7 @@ function import_remote_terms( array $args ) : array {
                     $up = wp_update_term( $local_term_id, $taxonomy, $update_args );
 
                     if ( is_wp_error( $up ) ) {
-                        $result['errors'][ $rid ] = 'Erro ao atualizar termo local: ' . $up->get_error_message();
+                        $result['errors'][ $rid ][] = 'Erro ao atualizar termo local: ' . $up->get_error_message();
                         continue;
                     } else {
                         $result['updated']++;
@@ -349,7 +349,6 @@ function import_remote_terms( array $args ) : array {
                 // Mapa remoto -> local
                 $result['map'][ $rid ] = $local_term_id;
 
-                // Aplica metas (já possivelmente transformadas em fn_pre)
                 if ( $term_meta ) {
                     foreach ( $term_meta as $m ) {
                         $k = $m['meta_key']   ?? '';
@@ -359,7 +358,6 @@ function import_remote_terms( array $args ) : array {
                             continue;
                         }
 
-                        // Não sobrescreve metadados internos da migração
                         if ( $k === '_hacklab_migration_source_id' || $k === '_hacklab_migration_source_blog' ) {
                             continue;
                         }
@@ -368,11 +366,10 @@ function import_remote_terms( array $args ) : array {
                     }
                 }
 
-                // Metas internas de migração
                 update_term_meta( $local_term_id, '_hacklab_migration_source_id', $rid );
 
-                if ( $o['blog_id'] ) {
-                    update_term_meta( $local_term_id, '_hacklab_migration_source_blog', (int) $o['blog_id'] );
+                if ( $blog_id ) {
+                    update_term_meta( $local_term_id, '_hacklab_migration_source_blog', $blog_id );
                 }
 
                 // fn_pos: pós-processamento (ex.: log, relações extras, etc.)
@@ -381,7 +378,7 @@ function import_remote_terms( array $args ) : array {
                         'remote_term_id' => $rid,
                         'local_term_id'  => $local_term_id,
                         'taxonomy'       => $taxonomy,
-                        'blog_id'        => $o['blog_id'] ? (int) $o['blog_id'] : null,
+                        'blog_id'        => $blog_id,
                         'term'           => [
                             'name'          => $name,
                             'slug'          => $slug,
@@ -396,7 +393,7 @@ function import_remote_terms( array $args ) : array {
                     try {
                         ( $o['fn_pos'] )( $payload_pos, $o );
                     } catch ( \Throwable $e ) {
-                        $result['errors'][ $rid ] = 'fn_pos (term ' . $rid . '): ' . $e->getMessage();
+                        $result['errors'][ $rid ][] = 'fn_pos (term ' . $rid . '): ' . $e->getMessage();
                     }
                 }
             }
@@ -460,3 +457,52 @@ function get_term_by_meta_data( string $meta_key, $meta_value, ?string $taxonomy
     return $term_id;
 }
 
+function find_local_term( int $remote_term_id, int $blog_id = 1, ?string $taxonomy = null ): int {
+    static $cache = [];
+
+    if ( $remote_term_id <= 0 ) {
+        return 0;
+    }
+
+    $taxonomy = $taxonomy ? (string) $taxonomy : '';
+    $cache_key = $remote_term_id . '|' . $blog_id . '|' . $taxonomy;
+
+    if ( array_key_exists( $cache_key, $cache ) ) {
+        return (int) $cache[ $cache_key ];
+    }
+
+    $args = [
+        'number'     => 1,
+        'fields'     => 'ids',
+        'hide_empty' => false,
+        'meta_query' => [
+            [
+                'key'     => '_hacklab_migration_source_id',
+                'value'   => $remote_term_id,
+                'compare' => '='
+            ],
+            [
+                'key'     => '_hacklab_migration_source_blog',
+                'value'   => $blog_id,
+                'compare' => '='
+            ]
+        ]
+    ];
+
+    if ( $taxonomy !== '' ) {
+        $args['taxonomy'] = $taxonomy;
+    }
+
+    $query_term = new \WP_Term_Query( $args );
+    $terms = $query_term->get_terms();
+
+    if ( empty( $terms ) || is_wp_error( $terms ) ) {
+        $cache[ $cache_key ] = 0;
+        return 0;
+    }
+
+    $term_id = (int) $terms[0];
+    $cache[ $cache_key ] = $term_id;
+
+    return $term_id;
+}
