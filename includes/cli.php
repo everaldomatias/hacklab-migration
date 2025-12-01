@@ -324,23 +324,23 @@ class Commands {
      * ## EXAMPLES
      *
      *     # Importa todos os usuários do blog 4 (multisite remoto):
-     *     wp run-import-users --blog_id=4
+     *     wp import-users --blog_id=4
      *
      *     # Importa apenas usuários específicos (IDs 10, 20, 30) do blog 2:
-     *     wp run-import-users --blog_id=2 --include_ids=10,20,30
+     *     wp import-users --blog_id=2 --include_ids=10,20,30
      *
      *     # Importa todos os usuários exceto os IDs 5,6,7:
-     *     wp run-import-users --exclude_ids=5,6,7
+     *     wp import-users --exclude_ids=5,6,7
      *
      *     # Executa em modo de simulação (sem gravar nada) para o blog 3:
-     *     wp run-import-users --blog_id=3 --dry_run
+     *     wp import-users --blog_id=3 --dry_run
      *
      * @param array $args         Argumentos posicionais (não utilizados neste comando).
      * @param array $command_args Argumentos nomeados/associativos (blog_id, include_ids, exclude_ids, chunk, dry_run).
      *
      * @return void
      */
-    static function cmd_run_import_users( $args, $command_args ) {
+    static function cmd_import_users( $args, $command_args ) {
         $defaults = [
             'blog_id'     => null,
             'include_ids' => '',
@@ -411,7 +411,7 @@ class Commands {
         }
     }
 
-    static function cmd_run_import_terms( $args, $command_args ) {
+    static function cmd_import_terms( $args, $command_args ) {
         $options = wp_parse_args( $command_args, [
             'blog_id'     => null,
             'taxonomies'  => '',
