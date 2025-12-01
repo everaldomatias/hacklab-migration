@@ -79,7 +79,7 @@ function import_remote_posts( array $args = [] ): array {
             'post_type'     => $remote_type,
             'post_date'     => (string) $row['post_date'],
             'post_date_gmt' => (string) ( $row['post_date_gmt'] ?? '' ),
-            'post_author'   => (string) ( $row['post_author'] ? get_user_by_meta_data( '_hacklab_migration_source_id', $row['post_author'] ) : '' ),
+            'post_author'   => (string) ( $row['post_author'] ? find_local_user( $row['post_author'], $blog_id ) : '' ),
             'post_name'     => (string) ( $row['post_name'] ?? sanitize_title( (string) $row['post_title'] ) )
         ];
 
@@ -93,7 +93,7 @@ function import_remote_posts( array $args = [] ): array {
         if ( ! empty( $post_meta['_edit_last'] ) ) {
             $remote_user_id = (int) $post_meta['_edit_last'];
 
-            $local_user_id = get_user_by_meta_data( '_hacklab_migration_source_id', $remote_user_id );
+            $local_user_id = find_local_user( $remote_user_id, $blog_id );
 
             if ( ! $local_user_id ) {
                 $local_user_id = import_remote_user( $remote_user_id, $blog_id, false );

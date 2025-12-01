@@ -362,7 +362,7 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     if ( ! $ext instanceof \wpdb ) return 0;
 
     $creds = get_credentials();
-    $remote_prefix  = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+    $remote_prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
 
     $t_users    = resolve_remote_users_table( $creds );
     $t_usermeta = resolve_remote_usermeta_table( $creds );
@@ -380,7 +380,6 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     $rid = (int) $u['ID'];
     $login = (string) $u['user_login'];
     $email = (string) $u['user_email'];
-
 
     $meta_sql = "
         SELECT um.user_id, um.meta_key, um.meta_value
@@ -511,4 +510,50 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     }
 
     return (int) $target_user_id;
+}
+
+/**
+ * Localiza um usuário previamente importado a partir do ID remoto e blog remoto.
+ *
+ * Esta função busca no ambiente local um usuário que tenha sido criado pela migração,
+ * utilizando os metadados internos `_hacklab_migration_source_id` e
+ * `_hacklab_migration_source_blog`. Esses metadados garantem a unicidade do usuário
+ * mesmo em cenários multisite, onde diferentes blogs remotos podem ter IDs iguais.
+ *
+ * Retorna o ID do usuário local correspondente ao usuário remoto informado.
+ * Caso nenhum usuário seja encontrado, retorna 0.
+ *
+ * @param int $remote_user_id  ID do usuário no ambiente remoto.
+ * @param int $blog_id         ID do blog remoto de onde o usuário foi importado. Default 1.
+ *
+ * @return int ID do usuário local encontrado ou 0 se não houver correspondência.
+ *
+ * @since 0.0.1
+ * @version 1.0.0
+ */
+function find_local_user( int $remote_user_id, int $blog_id = 1 ): int {
+    if ( $remote_user_id <= 0 ) {
+        return 0;
+    }
+
+    $query_user = new \WP_User_Query( [
+        'number'     => 1,
+        'fields'     => 'ID',
+        'meta_query' => [
+            [
+                'key'     => '_hacklab_migration_source_id',
+                'value'   => $remote_user_id,
+                'compare' => '='
+            ],
+            [
+                'key'     => '_hacklab_migration_source_blog',
+                'value'   => $blog_id,
+                'compare' => '='
+            ]
+        ]
+    ] );
+
+    $ids = $query_user->get_results();
+
+    return $ids ? (int) $ids[0] : 0;
 }

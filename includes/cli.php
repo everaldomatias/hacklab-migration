@@ -250,20 +250,20 @@ class Commands {
      * ## EXAMPLES
      *
      *     # Importa o usuário remoto de ID 123 do blog 1 (single site ou blog principal):
-     *     wp hacklab-migration run-import-user 123
+     *     wp import-user 123
      *
      *     # Importa o usuário remoto de ID 456 do blog 4 em um multisite:
-     *     wp hacklab-migration run-import-user 456 --blog_id=4
+     *     wp import-user 456 --blog_id=4
      *
      *     # Simula a importação do usuário remoto 789, sem gravar nada:
-     *     wp hacklab-migration run-import-user 789 --blog_id=2 --dry_run
+     *     wp import-user 789 --blog_id=2 --dry_run
      *
      * @param array $args         Argumentos posicionais (ex.: [ <remote_user_id> ]).
      * @param array $command_args Argumentos nomeados/associativos (ex.: [ 'blog_id' => 2, 'dry_run' => true ]).
      *
      * @return void
      */
-    static function cmd_run_import_user( $args, $command_args ) {
+    static function cmd_import_user( $args, $command_args ) {
         $defaults = [
             'blog_id'        => 1,
             'dry_run'        => false
@@ -283,7 +283,7 @@ class Commands {
         $result = import_remote_user( $remote_user_id, $blog_id, $dry_run );
 
         if ( $result ) {
-            \WP_CLI::success( "Usuário importado com sucesso! ID: $result" );
+            \WP_CLI::success( "Usuário importado/atualizado com sucesso! ID: $result" );
         } else {
             \WP_CLI::error( 'Não foi possível importar o usuário.' );
         }
