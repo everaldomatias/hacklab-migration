@@ -90,6 +90,7 @@ function resolve_remote_terms_tables( array $creds, ?int $blog_id ): array {
         'terms'              => $prefix . $mid . 'terms',
         'term_taxonomy'      => $prefix . $mid . 'term_taxonomy',
         'term_relationships' => $prefix . $mid . 'term_relationships',
+        'termmeta'           => $prefix . $mid . 'termmeta'
     ];
 }
 

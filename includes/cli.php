@@ -411,6 +411,77 @@ class Commands {
         }
     }
 
+    static function cmd_run_import_terms( $args, $command_args ) {
+        $options = wp_parse_args( $command_args, [
+            'blog_id'     => null,
+            'taxonomies'  => '',
+            'include_ids' => '',
+            'exclude_ids' => '',
+            'chunk'       => 500,
+            'dry_run'     => false,
+            'fn_pre'      => '',
+            'fn_pos'      => '',
+        ] );
+
+        $taxonomies = [];
+        if ( ! empty( $options['taxonomies'] ) ) {
+            $taxonomies = array_map( 'sanitize_key', explode( ',', $options['taxonomies'] ) );
+        }
+
+        $include_ids = [];
+        if ( ! empty( $options['include_ids'] ) ) {
+            $include_ids = array_map( 'intval', explode( ',', $options['include_ids'] ) );
+        }
+
+        $exclude_ids = [];
+        if ( ! empty( $options['exclude_ids'] ) ) {
+            $exclude_ids = array_map( 'intval', explode( ',', $options['exclude_ids'] ) );
+        }
+
+        $fn_pre = ! empty( $options['fn_pre'] ) ? (string) $options['fn_pre'] : null;
+        $fn_pos = ! empty( $options['fn_pos'] ) ? (string) $options['fn_pos'] : null;
+
+        if ( $fn_pre && ! is_callable( $fn_pre ) ) {
+            \WP_CLI::error( "A função fn_pre informada não é callable: {$fn_pre}" );
+        }
+
+        if ( $fn_pos && ! is_callable( $fn_pos ) ) {
+            \WP_CLI::error( "A função fn_pos informada não é callable: {$fn_pos}" );
+        }
+
+        $args_import = [
+            'blog_id'     => $options['blog_id'] ? (int) $options['blog_id'] : null,
+            'taxonomies'  => $taxonomies,
+            'include_ids' => $include_ids,
+            'exclude_ids' => $exclude_ids,
+            'chunk'       => (int) $options['chunk'],
+            'dry_run'     => \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false ),
+            'fn_pre'      => $fn_pre,
+            'fn_pos'      => $fn_pos
+        ];
+
+        \WP_CLI::log( "Iniciando importação de termos..." );
+        $result = import_remote_terms( $args_import );
+
+        \WP_CLI::log( "" );
+        \WP_CLI::line( "====================== RESULTADO ======================" );
+        \WP_CLI::line( "Termos encontrados: " . $result['found_terms'] );
+        \WP_CLI::line( "Importados:         " . $result['imported'] );
+        \WP_CLI::line( "Atualizados:        " . $result['updated'] );
+        \WP_CLI::line( "--------------------------------------------------------" );
+        \WP_CLI::line( "Erros:              " . count( $result['errors'] ) );
+        \WP_CLI::line( "========================================================" );
+
+        if ( ! empty( $result['errors'] ) ) {
+            \WP_CLI::warning( "Erros ocorreram durante a importação:" );
+            foreach ( $result['errors'] as $rid => $msg ) {
+                \WP_CLI::warning( "Termo remoto {$rid}: {$msg}" );
+            }
+        }
+
+        \WP_CLI::success( "Processo concluído." );
+    }
+
     // Helpers
     private static function csv_or_scalar( $value ) {
         if ( is_array( $value ) ) return $value;

@@ -77,13 +77,21 @@ function log_message( string $message, string $level = 'info' ) : void {}
 
 function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, array $only_tax = [] ): array {
     $ext = get_external_wpdb();
-    if ( ! $ext ) return [];
+    if ( ! $ext instanceof \wpdb ) return [];
 
     $post_ids = array_values( array_unique( array_map( 'intval', $post_ids ) ) );
     if ( ! $post_ids ) return [];
 
     $creds  = get_credentials();
     $tables = resolve_remote_terms_tables( $creds, $blog_id );
+
+    if (
+        empty( $tables['term_taxonomy'] )
+        || empty( $tables['term_relationships'] )
+        || empty( $tables['terms'] )
+    ) {
+        return [];
+    }
 
     $only_tax = array_values(
         array_filter(
