@@ -13,12 +13,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 function import_remote_attachments( array $args = [] ) : array {
     $defaults = [
-        'blog_id'          => 1,
-        'chunk'            => 500,
-        'dry_run'          => false,
-        'local_map'        => [],
-        'old_uploads_base' => '',
-        'rows'             => []
+        'blog_id'      => 1,
+        'chunk'        => 500,
+        'dry_run'      => false,
+        'local_map'    => [],
+        'uploads_base' => '',
+        'rows'         => []
     ];
 
     $options = wp_parse_args( $args, $defaults );
@@ -104,10 +104,10 @@ function import_remote_attachments( array $args = [] ) : array {
     }
 
     // Reescrever URLs do content
-    $old_base = (string) $options['old_uploads_base'];
+    $old_base = (string) $options['uploads_base'];
 
     if ( $old_base === '' ) {
-        $summary['errors'][] = 'Rewrite content: old_uploads_base ausente';
+        $summary['errors'][] = 'Rewrite content: uploads_base ausente';
     } else {
         $uploads = wp_upload_dir();
 
@@ -446,7 +446,7 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
     return $summary;
 }
 
-function replace_content_urls( string $html, string $old_uploads_base, string $new_uploads_base, ?int $remote_blog_id ): string {
-    $map = build_uploads_url_map( $old_uploads_base, $new_uploads_base, $remote_blog_id );
+function replace_content_urls( string $html, string $uploads_base, string $new_uploads_base, ?int $remote_blog_id ): string {
+    $map = build_uploads_url_map( $uploads_base, $new_uploads_base, $remote_blog_id );
     return replace_urls_in_content( $html, $map );
 }

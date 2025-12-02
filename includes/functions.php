@@ -13,14 +13,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 function run_import( array $args = [] ) : array {
     $defaults = [
-        'fetch'             => ['numberposts' => 10],
-        'dry_run'           => false,
-        'with_media'        => true,
         'attachments_chunk' => 500,
-        'old_uploads_base'  => '',
         'blog_id'           => null,
+        'dry_run'           => false,
+        'fetch'             => ['numberposts' => 10],
+        'fn_pos'            => null,
         'fn_pre'            => null,
-        'fn_pos'            => null
+        'uploads_base'      => '',
+        'with_media'        => true,
     ];
 
     $options = wp_parse_args( $args, $defaults );
@@ -51,12 +51,12 @@ function run_import( array $args = [] ) : array {
 
     if ( $options['with_media'] && $rows && ! $options['dry_run'] ) {
         $attachments_summary = import_remote_attachments( [
-            'blog_id'          => $blog_id,
-            'chunk'            => (int) $options['attachments_chunk'],
-            'dry_run'          => $options['dry_run'],
-            'local_map'        => $map,
-            'old_uploads_base' => (string) $options['old_uploads_base'],
-            'rows'             => $rows
+            'blog_id'      => $blog_id,
+            'chunk'        => (int) $options['attachments_chunk'],
+            'dry_run'      => $options['dry_run'],
+            'local_map'    => $map,
+            'uploads_base' => (string) $options['uploads_base'],
+            'rows'         => $rows
         ] );
     }
 

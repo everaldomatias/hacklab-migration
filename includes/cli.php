@@ -132,10 +132,10 @@ class Commands {
                     }
                     break;
 
-                case 'old_uploads_base':
+                case 'uploads_base':
                 case 'old-uploads-base':
                     if ( is_string( $argument_value ) && $argument_value !== '' ) {
-                        $options['old_uploads_base'] = $argument_value;
+                        $options['uploads_base'] = $argument_value;
                     }
                     break;
 
