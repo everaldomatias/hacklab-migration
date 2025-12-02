@@ -616,6 +616,80 @@ function get_remote_meta_keys( string $post_type, int $blog_id = 1 ): array {
 }
 
 /**
+ * Obtém meta keys e um exemplo de valor para cada uma em uma única consulta.
+ *
+ * @param string $post_type Post type remoto.
+ * @param int    $blog_id   ID do blog remoto (multisite) ou 1 para single.
+ *
+ * @return array<string,string> Mapa meta_key => exemplo de valor.
+ */
+function get_remote_meta_keys_with_example( string $post_type, int $blog_id = 1 ): array {
+    $out = [];
+
+    if ( $post_type === '' ) {
+        return $out;
+    }
+
+    $cache_key = 'hacklab_migration_meta_' . $post_type . '_' . $blog_id;
+
+    $cached = get_transient( $cache_key );
+    if ( is_array( $cached ) ) {
+        return $cached;
+    }
+
+    $ext = get_external_wpdb();
+
+    if ( ! $ext instanceof \wpdb ) {
+        return $out;
+    }
+
+    $creds = get_credentials();
+
+    $posts_table    = resolve_remote_posts_table( $creds, $blog_id );
+    $postmeta_table = resolve_remote_postmeta_table( $creds, $blog_id );
+
+    if ( ! $posts_table || ! $postmeta_table ) {
+        return $out;
+    }
+
+    $sql = "
+        SELECT pm.meta_key, pm.meta_value
+          FROM (
+            SELECT
+              pm.meta_key,
+              COALESCE(
+                MAX(CASE WHEN pm.meta_value IS NOT NULL AND pm.meta_value <> '' THEN pm.meta_id END),
+                MAX(pm.meta_id)
+              ) AS pick_id
+              FROM {$postmeta_table} pm
+              JOIN {$posts_table} p ON p.ID = pm.post_id
+             WHERE p.post_type = %s
+             GROUP BY pm.meta_key
+          ) picked
+          JOIN {$postmeta_table} pm ON pm.meta_id = picked.pick_id
+    ";
+
+    $prepared = $ext->prepare( $sql, $post_type );
+    if ( $prepared === null ) {
+        return $out;
+    }
+
+    $rows = $ext->get_results( $prepared, ARRAY_A ) ?: [];
+
+    foreach ( $rows as $row ) {
+        $k = isset( $row['meta_key'] ) ? (string) $row['meta_key'] : '';
+        if ( $k === '' ) {
+            continue;
+        }
+        $out[ $k ] = (string) ( $row['meta_value'] ?? '' );
+    }
+
+    set_transient( $cache_key, $out, 60 * MINUTE_IN_SECONDS );
+
+    return $out;
+}
+
+/**
  * Obtém a lista de post types existentes no banco de dados remoto.
  *
  * @since 0.0.1

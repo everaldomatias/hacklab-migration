@@ -195,9 +195,10 @@ function render_remote_meta_page() {
 
     $notice_key = 'hm_remote_meta';
 
-    $post_type = '';
-    $blog_id   = 1;
-    $meta_keys = [];
+    $post_type    = '';
+    $blog_id      = 1;
+    $meta_keys    = [];
+    $meta_samples = [];
 
     if ( isset( $_POST['hm_meta_submit'] ) ) {
         check_admin_referer( HACKLAB_MIGRATION_NONCE_ACTION );
@@ -218,7 +219,8 @@ function render_remote_meta_page() {
                 'error'
             );
         } else {
-            $meta_keys = get_remote_meta_keys( $post_type, $blog_id );
+            $meta_samples = get_remote_meta_keys_with_example( $post_type, $blog_id );
+            $meta_keys    = array_keys( $meta_samples );
 
             if ( empty( $meta_keys ) ) {
                 add_settings_error(
@@ -315,6 +317,45 @@ function render_remote_meta_page() {
                 readonly
                 style="width:100%;max-width:900px;min-height:220px;font-family:monospace;"
             ><?php echo esc_textarea( implode( "\n", $meta_keys ) ); ?></textarea>
+
+            <?php if ( ! empty( $meta_samples ) ) : ?>
+                <h3><?php esc_html_e( 'Exemplos de valores', 'hacklabr' ); ?></h3>
+                <p class="description">
+                    <?php esc_html_e( 'Coleta um exemplo por meta key para facilitar mapeamentos.', 'hacklabr' ); ?>
+                </p>
+                <table class="widefat striped" style="max-width:960px;">
+                    <thead>
+                        <tr>
+                            <th style="width:220px;"><?php esc_html_e( 'Meta key', 'hacklabr' ); ?></th>
+                            <th><?php esc_html_e( 'Exemplo de valor', 'hacklabr' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $meta_keys as $mk ) : ?>
+                            <tr>
+                                <td><code><?php echo esc_html( $mk ); ?></code></td>
+                                <td>
+                                    <?php
+                                    $raw = $meta_samples[ $mk ] ?? '';
+                                    if ( $raw === '' ) {
+                                        echo '<span style="color:#666;">&mdash;</span>';
+                                    } else {
+                                        $maybe = maybe_unserialize( $raw );
+                                        if ( is_array( $maybe ) || is_object( $maybe ) ) {
+                                            $render = wp_json_encode( $maybe, JSON_UNESCAPED_UNICODE );
+                                        } else {
+                                            $render = (string) $maybe;
+                                        }
+                                        $render = mb_substr( $render, 0, 400 );
+                                        echo '<code style="white-space:pre-wrap;">' . esc_html( $render ) . '</code>';
+                                    }
+                                    ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
     <?php
