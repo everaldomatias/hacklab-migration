@@ -353,7 +353,8 @@ function remote_get_posts( array $args = [] ) {
         'search'            => '',
         'fields'            => 'all',
         'blog_id'           => null,
-        'post_modified_gmt' => null
+        'post_modified_gmt' => null,
+        'tax_query'         => []
     ];
 
     foreach ( $args as $key => $value ) {
@@ -391,6 +392,88 @@ function remote_get_posts( array $args = [] ) {
     $where_sql = [];
     $params    = [];
 
+    $join_tax = '';
+    $tax_query = is_array( $a['tax_query'] ?? [] ) ? $a['tax_query'] : [];
+
+    $tax_relation = 'AND';
+    $tax_queries  = [];
+
+    if ( $tax_query ) {
+        if ( isset( $tax_query['taxonomy'] ) ) {
+            $tax_relation = 'AND';
+            $tax_queries = [ $tax_query ];
+        } else {
+            $tax_relation = strtoupper( (string) ( $tax_query['relation'] ?? 'AND' ) );
+            $tax_relation = in_array( $tax_relation, [ 'AND', 'OR' ], true ) ? $tax_relation : 'AND';
+
+            foreach ( $tax_queries as $k => $clause ) {
+                if ( $k === 'relation' ) {
+                    continue;
+                }
+
+                if ( ! is_array( $clause ) ) {
+                    continue;
+                }
+
+                $tax_queries[] = $clause;
+            }
+        }
+
+    }
+
+    if ( $tax_queries ) {
+        $tables = resolve_remote_terms_tables( $creds, $a['blog_id'] );
+
+        $table_terms              = $tables['terms'];
+        $table_term_taxonomy      = $tables['term_taxonomy'];
+        $table_term_relationships = $tables['term_relationships'];
+
+        $join_index      = 0;
+        $tax_where_parts = [];
+
+        foreach ( $tax_queries as $clause ) {
+            $taxonomy = trim( (string) ( $clause['taxonomy'] ?? '' ) );
+            $field    = (string) ( $clause['field'] ?? 'slug' );
+            $terms    = (array) ( $clause['terms'] ?? [] );
+
+            $terms = array_values( array_filter( array_map( 'trim', $terms ) ) );
+
+            if ( $taxonomy === '' || ! $terms ) {
+                continue;
+            }
+
+            $join_index++;
+            $tr_alias = 'tr' . $join_index;
+            $tt_alias = 'tt' . $join_index;
+            $t_alias  = 't' . $join_index;
+
+            $join_tax .= "
+                INNER JOIN {$table_term_relationships} {$tr_alias} ON {$tr_alias}.object_id = {$table_posts_quoted}.ID
+                INNER JOIN {$table_term_taxonomy} {$tt_alias} ON {$tt_alias}.term_taxonomy_id = {$tr_alias}.term_taxonomy_id
+                INNER JOIN {$table_terms} {$t_alias} ON {$t_alias}.term_id = {$tt_alias}.term_id
+            ";
+
+            $clause_sql_parts   = [];
+            $clause_sql_parts[] = "{$tt_alias}.taxonomy = %s";
+            $params[]           = $taxonomy;
+
+            $field_expr = "{$t_alias}.slug";
+            $ph         = implode( ',', array_fill( 0, count( $terms ), '%s' ) );
+
+            foreach ( $terms as $term ) {
+                $params[] = $term;
+            }
+
+            $clause_sql_parts[] = "{$field_expr} IN ({$ph})";
+
+            $tax_where_parts[] = '( ' . implode( ' AND ', $clause_sql_parts ) . ' )';
+        }
+
+        if ( $tax_where_parts ) {
+            $where_sql[] = '( ' . implode( " {$tax_relation} ", $tax_where_parts ) . ' )';
+        }
+    }
+
     $build_in = static function (string $field, $value, array &$params): string {
         if ( is_array( $value ) ) {
             $value = array_values( array_filter( array_map( 'strval', $value ), static fn( $v ) => $v !== '' ) );
@@ -406,15 +489,15 @@ function remote_get_posts( array $args = [] ) {
         return "{$field} = %s";
     };
 
-    $where_sql[] = $build_in( 'post_type',   $a['post_type'],   $params );
-    $where_sql[] = $build_in( 'post_status', $a['post_status'], $params );
+    $where_sql[] = $build_in( "{$table_posts_quoted}.post_type",   $a['post_type'],   $params );
+    $where_sql[] = $build_in( "{$table_posts_quoted}.post_status", $a['post_status'], $params );
 
     if ( ! empty( $a['include'] ) ) {
         $ids = array_values( array_filter( array_map( 'intval', (array) $a['include'] ), static fn( $v ) => $v > 0 ) );
         if ( $ids ) {
             $ph = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
             foreach ( $ids as $id ) $params[] = $id;
-            $where_sql[] = "ID IN ($ph)";
+            $where_sql[] = "{$table_posts_quoted}.ID IN ($ph)";
         } else {
             $where_sql[] = '1=0';
         }
@@ -425,14 +508,14 @@ function remote_get_posts( array $args = [] ) {
         if ( $ids ) {
             $ph = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
             foreach ( $ids as $id ) $params[] = $id;
-            $where_sql[] = "ID NOT IN ($ph)";
+            $where_sql[] = "{$table_posts_quoted}.ID NOT IN ($ph)";
         }
     }
 
     // Busca simples (title + content)
     if ( ! empty( $a['search'] ) ) {
         $like = '%' . $ext->esc_like( (string) $a['search'] ) . '%';
-        $where_sql[] = '(post_title LIKE %s OR post_content LIKE %s)';
+        $where_sql[] = "({$table_posts_quoted}.post_title LIKE %s OR {$table_posts_quoted}.post_content LIKE %s)";
         $params[] = $like;
         $params[] = $like;
     }
@@ -443,7 +526,7 @@ function remote_get_posts( array $args = [] ) {
         } else {
             $after = (string) $a['post_modified_gmt'];
         }
-        $where_sql[] = 'post_modified_gmt >= %s';
+        $where_sql[] = "{$table_posts_quoted}.post_modified_gmt >= %s";
         $params[]    = $after;
     }
 
@@ -454,12 +537,14 @@ function remote_get_posts( array $args = [] ) {
         : '*';
 
     $sql = "
-        SELECT {$select_cols}
-          FROM {$table_posts_quoted}
-          {$where}
-      ORDER BY {$orderby} {$order}
-         LIMIT %d OFFSET %d
+        SELECT DISTINCT {$select_cols}
+            FROM {$table_posts_quoted}
+            {$join_tax}
+            {$where}
+        ORDER BY {$table_posts_quoted}.{$orderby} {$order}
+            LIMIT %d OFFSET %d
     ";
+
     $params[] = $numberposts;
     $params[] = $offset;
 

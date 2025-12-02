@@ -49,6 +49,9 @@ class Commands {
         ];
         $fetch = $fetch_defaults;
 
+        $tax_query_clauses  = [];
+        $tax_query_relation = 'AND';
+
         foreach ( $command_args as $argument_name => $argument_value ) {
             $argument_value = is_string( $argument_value ) ? str_replace( '+', ' ', $argument_value ) : $argument_value;
 
@@ -56,6 +59,49 @@ class Commands {
                 $key = substr( $argument_name, 2 );
 
                 switch ( $key ) {
+                    case 'tax_query':
+                        // q:tax_query=category:apto
+                        // q:tax_query=category:apto,terreo
+                        // q:tax_query="category:apto;post_tag:futebol"
+                        $raw = (string) $argument_value;
+                        $raw = trim( $raw );
+                        if ( $raw === '' ) {
+                            break;
+                        }
+
+                        $parts = array_filter(
+                            array_map( 'trim', explode( ';', $raw ) )
+                        );
+
+                        foreach ( $parts as $tax_query_part ) {
+                            [ $taxonomy, $terms_str ] = array_pad(
+                                explode( ':', $tax_query_part, 2 ),
+                                2,
+                                ''
+                            );
+
+                            $taxonomy = trim( $taxonomy );
+                            $terms    = array_filter(
+                                array_map( 'trim', explode( ',', (string) $terms_str ) )
+                            );
+
+                            if ( $taxonomy === '' || ! $terms ) {
+                                continue;
+                            }
+
+                            $tax_query_clauses[] = [
+                                'taxonomy' => $taxonomy,
+                                'field'    => 'slug',
+                                'terms'    => $terms,
+                            ];
+                        }
+                        break;
+
+                    case 'relation':
+                        $rel = strtoupper( (string) $argument_value );
+                        $tax_query_relation = in_array( $rel, [ 'AND', 'OR' ], true ) ? $rel : 'AND';
+                        break;
+
                     case 'blog_id':
                         $fetch['blog_id'] = (int) $argument_value;
                         break;
@@ -79,14 +125,6 @@ class Commands {
                     case 'include':
                     case 'exclude':
                         $fetch[ $key ] = self::csv_ints( $argument_value );
-                        break;
-
-                    case 'with_meta':
-                        $fetch['with_meta'] = self::to_bool( $argument_value );
-                        break;
-
-                    case 'meta_keys':
-                        $fetch['meta_keys'] = self::csv_strs( $argument_value );
                         break;
 
                     case 'post_modified_gmt':
@@ -144,6 +182,17 @@ class Commands {
             }
         }
 
+        if ( $tax_query_clauses ) {
+            if ( count( $tax_query_clauses ) === 1 ) {
+                $fetch['tax_query'] = $tax_query_clauses[0];
+            } else {
+                $fetch['tax_query'] = array_merge(
+                    [ 'relation' => $tax_query_relation ],
+                    $tax_query_clauses
+                );
+            }
+        }
+
         if ( ! array_key_exists( 'media', $options ) ) {
             $options['media'] = true;
         }
@@ -170,7 +219,7 @@ class Commands {
             }
         }
 
-        $posts = $summary['posts'] ?? [];
+        $posts       = $summary['posts'] ?? [];
         $attachments = $summary['attachments'] ?? [];
 
         $posts_data = [
@@ -189,20 +238,20 @@ class Commands {
             'missing_files'     => implode( ', ', $attachments['missing_files'] ?? [] ),
         ];
 
-        $separator = str_repeat('#', 59);
+        $separator = str_repeat( '#', 59 );
 
         \WP_CLI::line();
         \WP_CLI::line( $separator );
-        \WP_CLI::line('Posts:');
+        \WP_CLI::line( 'Posts:' );
 
         foreach ( $posts_data as $label => $value ) {
-            \WP_CLI::log(sprintf('%s: %s', $label, $value));
+            \WP_CLI::log( sprintf( '%s: %s', $label, $value ) );
         }
 
         \WP_CLI::line( $separator );
         \WP_CLI::line();
         \WP_CLI::line( $separator );
-        \WP_CLI::line('Attachments:');
+        \WP_CLI::line( 'Attachments:' );
 
         foreach ( $attachments_data as $label => $value ) {
             \WP_CLI::log( sprintf( '%s: %s', $label, $value ) );
