@@ -272,7 +272,7 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
     }
 }
 
-function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_id, array $meta_keys = [] ) {
+function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_id ) {
     if ( ! $rows ) {
         return $rows;
     }
@@ -291,17 +291,7 @@ function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_
 
     $sql = "SELECT post_id, meta_key, meta_value FROM {$postmeta} WHERE post_id IN ($ph_ids)";
 
-    if ( $meta_keys ) {
-        $meta_keys = array_values( array_filter( array_map( 'strval', (array) $meta_keys ), static fn( $k ) => $k !== '' ) );
-
-        if ( $meta_keys ) {
-            $ph_keys = implode( ',', array_fill( 0, count( $meta_keys ), '%s' ) );
-            $sql .= " AND meta_key IN ($ph_keys)";
-            $params = array_merge( $params, $meta_keys );
-        }
-    }
-
-    $prepared = $ext->prepare( $sql, $params );
+    $prepared = $ext->prepare( $sql, ...$params );
     $meta_rows = $ext->get_results( $prepared, ARRAY_A ) ?: [];
 
     $by_post = [];
@@ -354,7 +344,7 @@ function remote_get_posts( array $args = [] ) {
     $defaults = [
         'post_type'         => 'post',
         'post_status'       => 'publish',
-        'numberposts'       => 5,
+        'numberposts'       => 10,
         'offset'            => 0,
         'orderby'           => 'post_date',
         'order'             => 'DESC',
@@ -363,8 +353,6 @@ function remote_get_posts( array $args = [] ) {
         'search'            => '',
         'fields'            => 'all',
         'blog_id'           => null,
-        'with_meta'         => true,
-        'meta_keys'         => [],
         'post_modified_gmt' => null
     ];
 
@@ -484,9 +472,8 @@ function remote_get_posts( array $args = [] ) {
 
     $rows = $ext->get_results( $prepared, ARRAY_A );
 
-    if ( $rows && $fields !== 'ids' && ! empty( $a['with_meta'] ) ) {
-        $wanted_keys = is_string( $a['meta_keys'] ) ? [$a['meta_keys']] : (array) $a['meta_keys'];
-        $rows = attach_meta_to_rows( $ext, $creds, $rows, $a['blog_id'], $wanted_keys );
+    if ( $rows ) {
+        $rows = attach_meta_to_rows( $ext, $creds, $rows, $a['blog_id'] );
     }
 
     return $rows ?: [];

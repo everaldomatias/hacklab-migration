@@ -25,6 +25,12 @@ function import_remote_posts( array $args = [] ): array {
 
     $options = wp_parse_args( $args, $defaults );
 
+    $fetch = (array) ( $options['fetch'] ?? [] );
+    unset( $fetch['fields'] );
+    $fetch['fields'] = 'all';
+
+    $options['fetch'] = $fetch;
+
     $summary = [
         'found_posts' => 0,
         'imported'    => 0,
@@ -33,11 +39,11 @@ function import_remote_posts( array $args = [] ): array {
         'attachments' => 0,
         'map'         => [],
         'errors'      => [],
-        'args'        => $options['fetch'],
+        'args'        => $fetch,
         'rows'        => []
     ];
 
-    $rows = remote_get_posts( (array) $options['fetch'] );
+    $rows = remote_get_posts( $fetch );
 
     if ( is_wp_error( $rows ) ) {
         $summary['errors'][] = $rows->get_error_message();
@@ -92,11 +98,10 @@ function import_remote_posts( array $args = [] ): array {
 
         if ( ! empty( $post_meta['_edit_last'] ) ) {
             $remote_user_id = (int) $post_meta['_edit_last'];
-
             $local_user_id = find_local_user( $remote_user_id, $blog_id );
 
             if ( ! $local_user_id ) {
-                $local_user_id = import_remote_user( $remote_user_id, $blog_id, false );
+                $local_user_id = import_remote_user( $remote_user_id, $blog_id, $options['dry_run'] );
             }
 
             $post_meta['_edit_last'] = (int) $local_user_id;
@@ -143,7 +148,7 @@ function import_remote_posts( array $args = [] ): array {
             }
 
             add_post_meta( $local_id, '_hacklab_migration_source_id', $remote_id, true );
-            add_post_meta( $local_id, '_hacklab_migration_source_blog', (int) ( $args['fetch']['blog_id'] ?? $args['blog_id'] ?? $row['blog_id'] ?? 1 ), true );
+            add_post_meta( $local_id, '_hacklab_migration_source_blog', $blog_id, true );
             $summary['imported']++;
         }
 
