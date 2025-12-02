@@ -12,6 +12,7 @@ define( 'HACKLAB_MIGRATION_MENU_SLUG',        'hacklab-migration-db' );
 define( 'HACKLAB_MIGRATION_NONCE_ACTION',     'hm_db_save' );
 
 add_action( 'admin_menu', __NAMESPACE__ . '\\add_admin_menu', 20 );
+add_action( 'admin_post_hm_export_meta', __NAMESPACE__ . '\\export_remote_meta_csv' );
 
 function add_admin_menu() {
      add_menu_page(
@@ -355,6 +356,15 @@ function render_remote_meta_page() {
                         <?php endforeach; ?>
                     </tbody>
                 </table>
+
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top:12px;">
+                    <?php wp_nonce_field( HACKLAB_MIGRATION_NONCE_ACTION ); ?>
+                    <input type="hidden" name="hm_meta_post_type" value="<?php echo esc_attr( $post_type ); ?>">
+                    <input type="hidden" name="hm_meta_blog_id" value="<?php echo (int) $blog_id; ?>">
+                    <input type="hidden" name="action" value="hm_export_meta">
+                    <input type="hidden" name="hm_meta_export" value="1">
+                    <?php submit_button( __( 'Baixar CSV (meta_key, valor)', 'hacklabr' ), 'secondary', 'hm_meta_export_btn', false ); ?>
+                </form>
             <?php endif; ?>
         <?php endif; ?>
     </div>
@@ -386,4 +396,51 @@ function save_settings( array $values ) : bool {
     }
 
     return true;
+}
+
+/**
+ * Exporta meta keys e exemplos em CSV (endpoint admin-post.php?action=hm_export_meta).
+ */
+function export_remote_meta_csv() {
+    if ( ! current_user_can( HACKLAB_MIGRATION_CAP ) ) {
+        wp_die( esc_html__( 'Sem permissão.', 'hacklabr' ) );
+    }
+
+    check_admin_referer( HACKLAB_MIGRATION_NONCE_ACTION );
+
+    $post_type = isset( $_POST['hm_meta_post_type'] )
+        ? sanitize_key( wp_unslash( $_POST['hm_meta_post_type'] ) )
+        : '';
+
+    $blog_id = isset( $_POST['hm_meta_blog_id'] )
+        ? (int) $_POST['hm_meta_blog_id']
+        : 1;
+
+    if ( $post_type === '' ) {
+        wp_die( esc_html__( 'Post type inválido para exportação.', 'hacklabr' ) );
+    }
+
+    $meta_samples = get_remote_meta_keys_with_example( $post_type, $blog_id );
+
+    $filename = sprintf( 'remote-meta-%s-blog-%d.csv', $post_type, (int) $blog_id );
+
+    nocache_headers();
+    header( 'Content-Type: text/csv; charset=utf-8' );
+    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+
+    $out = fopen( 'php://output', 'w' );
+    if ( $out ) {
+        fputcsv( $out, [ 'meta_key', 'example_value' ] );
+        foreach ( $meta_samples as $mk => $raw ) {
+            $maybe = maybe_unserialize( $raw );
+            if ( is_array( $maybe ) || is_object( $maybe ) ) {
+                $val = wp_json_encode( $maybe, JSON_UNESCAPED_UNICODE );
+            } else {
+                $val = (string) $maybe;
+            }
+            fputcsv( $out, [ $mk, $val ] );
+        }
+        fclose( $out );
+    }
+    exit;
 }
