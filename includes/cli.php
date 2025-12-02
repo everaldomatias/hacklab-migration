@@ -360,14 +360,14 @@ class Commands {
         $include_ids = [];
 
         if ( ! empty( $options['include_ids'] ) ) {
-            $include_ids = explode( ',', $$options['include_ids'] );
+            $include_ids = explode( ',', $options['include_ids'] );
             $include_ids = array_map( 'intval', $include_ids );
         }
 
         $exclude_ids = [];
 
         if ( ! empty( $options['exclude_ids'] ) ) {
-            $exclude_ids = explode( ',', $$options['exclude_ids'] );
+            $exclude_ids = explode( ',', $options['exclude_ids'] );
             $exclude_ids = array_map( 'intval', $exclude_ids );
         }
 
