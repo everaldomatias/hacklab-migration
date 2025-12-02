@@ -27,3 +27,4 @@ sftp.json
 .vscode
 /node_modules
 /dist
+*.zip
