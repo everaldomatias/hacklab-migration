@@ -22,24 +22,17 @@ class Commands {
     }
 
     // wp run-import q:post_type=post q:numberposts=20 dry_run=1
-    static function cmd_run_import( $args, $command_args ) {
-        if ( empty( $command_args ) && ! empty( $args ) ) {
-            foreach ( $args as $arg ) {
-                $parts = explode( '=', $arg, 2 );
-                $k = $parts[0] ?? '';
-                $v = $parts[1] ?? null;
-                if ( $k === '' ) {
-                    continue;
-                }
-                $command_args[ $k ] = $v;
-            }
-        }
+    static function cmd_run_import( $args, $assoc_args ) {
+        // $args = argumentos posicionais
+        // $assoc_args = flags: --q:*, --dry_run, --media, etc.
 
         $fetch   = [];
         $options = [];
 
+        $remote_blog_id = isset( $args[0] ) ? (int) $args[0] : 1;
+
         $fetch_defaults = [
-            'blog_id'     => 1,
+            'blog_id'     => $remote_blog_id,
             'post_type'   => 'post',
             'post_status' => 'publish',
             'numberposts' => 10,
@@ -47,22 +40,25 @@ class Commands {
             'orderby'     => 'post_date',
             'order'       => 'DESC',
         ];
+
         $fetch = $fetch_defaults;
 
         $tax_query_clauses  = [];
         $tax_query_relation = 'AND';
 
-        foreach ( $command_args as $argument_name => $argument_value ) {
-            $argument_value = is_string( $argument_value ) ? str_replace( '+', ' ', $argument_value ) : $argument_value;
+        foreach ( $assoc_args as $argument_name => $argument_value ) {
+            $argument_value = is_string( $argument_value )
+                ? str_replace( '+', ' ', $argument_value )
+                : $argument_value;
 
             if ( strpos( $argument_name, 'q:' ) === 0 ) {
-                $key = substr( $argument_name, 2 );
+                $key = substr( $argument_name, 2 ); // remove "q:"
 
                 switch ( $key ) {
                     case 'tax_query':
-                        // q:tax_query=category:apto
-                        // q:tax_query=category:apto,terreo
-                        // q:tax_query="category:apto;post_tag:futebol"
+                        // --q:tax_query=category:apto
+                        // --q:tax_query=category:apto,terreo
+                        // --q:tax_query="category:apto;post_tag:futebol"
                         $raw = (string) $argument_value;
                         $raw = trim( $raw );
                         if ( $raw === '' ) {
@@ -184,9 +180,9 @@ class Commands {
 
         if ( $tax_query_clauses ) {
             if ( count( $tax_query_clauses ) === 1 ) {
-                $fetch['tax_query'] = $tax_query_clauses[0];
+                $fetch['tax_query'][] = $tax_query_clauses[0];
             } else {
-                $fetch['tax_query'] = array_merge(
+                $fetch['tax_query'][] = array_merge(
                     [ 'relation' => $tax_query_relation ],
                     $tax_query_clauses
                 );
