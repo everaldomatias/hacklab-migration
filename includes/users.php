@@ -399,7 +399,7 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     foreach ( $meta_rows as $meta ) {
         $user_metas[] = [
             'meta_key'   => (string) $meta['meta_key'],
-            'meta_value' => (string) $meta['meta_value']
+            'meta_value' => maybe_unserialize( $meta['meta_value'] )
         ];
     }
 
@@ -411,7 +411,19 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     $local_prefix = $wpdb->get_blog_prefix( 0 );
     $target_blog_id = $blog_id ? (int) $blog_id : null;
 
+    $source_meta = [];
+
     if ( $user_metas ) {
+        foreach ( $user_metas as $m ) {
+            $mk = (string) $m['meta_key'];
+            $mv = $m['meta_value'];
+            $source_meta[ $mk ][] = $mv;
+        }
+
+        foreach ( $source_meta as $mk => $values ) {
+            $source_meta[ $mk ] = count( $values ) === 1 ? $values[0] : $values;
+        }
+
         $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_prefix, $target_blog_id, $remote_prefix );
     }
 
@@ -507,6 +519,8 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
         if ( $target_blog_id ) {
             update_user_meta( $target_user_id, '_hacklab_migration_source_blog', $target_blog_id );
         }
+
+        update_user_meta( $target_user_id, '_hacklab_migration_source_meta', $source_meta );
     } finally {
         remove_filter( 'send_password_change_email', '__return_false', 999 );
         remove_filter( 'send_email_change_email', '__return_false', 999 );
