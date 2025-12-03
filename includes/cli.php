@@ -141,7 +141,7 @@ class Commands {
                 continue;
             }
 
-            switch ( $argument_name ) {
+            switch ( $argument_name ) { // iniciam com "--"
                 case 'dry_run':
                 case 'dry-run':
                     $options['dry_run'] = self::to_bool( $argument_value ?? true );

@@ -686,7 +686,7 @@ function get_remote_meta_keys( string $post_type, int $blog_id = 1 ): array {
     $keys = $ext->get_col( $prepared );
 
     if ( $ext->last_error ) {
-        add_action( 'logger', [ 'context' => 'get_remote_meta_keys', 'error' => $ext->last_error ] );
+        do_action( 'logger', [ 'context' => 'get_remote_meta_keys', 'error' => $ext->last_error ] );
     }
 
     if ( ! is_array( $keys ) ) {

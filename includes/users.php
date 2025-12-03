@@ -116,6 +116,61 @@ function import_remote_users( array $args ) : array {
         $off_email_filters();
     }
 
+    $contains_object = static function ( $val ) use ( &$contains_object ): bool {
+        if ( is_object( $val ) ) {
+            return true;
+        }
+
+        if ( is_array( $val ) ) {
+            foreach ( $val as $v ) {
+                if ( $contains_object( $v ) ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    };
+
+    $safe_unserialize = static function ( $value ) use ( $contains_object ) {
+        if ( is_object( $value ) ) {
+            return maybe_serialize( $value );
+        }
+
+        if ( is_array( $value ) && $contains_object( $value ) ) {
+            return maybe_serialize( $value );
+        }
+
+        if ( ! is_string( $value ) ) {
+            return $value;
+        }
+
+        if ( ! is_serialized( $value ) ) {
+            return $value;
+        }
+
+        if ( preg_match( '/^[OCais]:/i', ltrim( $value ) ) ) {
+            $un = @unserialize( $value, ['allowed_classes' => false] );
+            if ( $un !== false || $value === 'b:0;' ) {
+                if ( $contains_object( $un ) ) {
+                    return $value;
+                }
+                return $un;
+            }
+        }
+
+        $un = @unserialize( $value, ['allowed_classes' => false] );
+
+        if ( $un !== false || $value === 'b:0;' ) {
+            if ( $contains_object( $un ) ) {
+                return $value;
+            }
+            return $un;
+        }
+
+        return $value;
+    };
+
     try {
         for ( $i = 0; $i < count( $remote_ids ); $i += $chunk ) {
             $ids = array_slice( $remote_ids, $i, $chunk );
@@ -149,7 +204,7 @@ function import_remote_users( array $args ) : array {
                 $uid = (int) $mr['user_id'];
                 $meta_by_user[$uid][] = [
                     'meta_key'   => (string) $mr['meta_key'],
-                    'meta_value' => maybe_unserialize( $mr['meta_value'] )
+                    'meta_value' => $safe_unserialize( $mr['meta_value'] )
                 ];
             }
 
@@ -158,6 +213,10 @@ function import_remote_users( array $args ) : array {
                 $login = (string) $u['user_login'];
                 $email = (string) $u['user_email'];
                 $exists_by_login = get_user_by( 'login', $login );
+
+                if ( $login === 'hacklab' ) {
+                    continue;
+                }
 
                 $target_user_id = 0;
                 $is_new = false;
@@ -235,7 +294,7 @@ function import_remote_users( array $args ) : array {
                     if ( $user_metas ) {
                         foreach ( $user_metas as $raw_meta ) {
                             $mk = (string) $raw_meta['meta_key'];
-                            $mv = $raw_meta['meta_value'];
+                            $mv = $safe_unserialize( $raw_meta['meta_value'] );
 
                             $source_meta[ $mk ][] = $mv;
                         }
@@ -258,7 +317,7 @@ function import_remote_users( array $args ) : array {
                                 continue;
                             }
 
-                            update_user_meta( $target_user_id, $k, maybe_unserialize( $v ) );
+                            update_user_meta( $target_user_id, $k, $safe_unserialize( $v ) );
                         }
                     }
 
@@ -396,10 +455,65 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     $meta_rows = $ext->get_results( $ext->prepare( $meta_sql, $rid ), ARRAY_A ) ?: [];
     $user_metas = [];
 
+    $contains_object = static function ( $val ) use ( &$contains_object ): bool {
+        if ( is_object( $val ) ) {
+            return true;
+        }
+
+        if ( is_array( $val ) ) {
+            foreach ( $val as $v ) {
+                if ( $contains_object( $v ) ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    };
+
+    $safe_unserialize = static function ( $value ) use ( $contains_object ) {
+        if ( is_object( $value ) ) {
+            return maybe_serialize( $value );
+        }
+
+        if ( is_array( $value ) && $contains_object( $value ) ) {
+            return maybe_serialize( $value );
+        }
+
+        if ( ! is_string( $value ) ) {
+            return $value;
+        }
+
+        if ( ! is_serialized( $value ) ) {
+            return $value;
+        }
+
+        if ( preg_match( '/^[OCais]:/i', ltrim( $value ) ) ) {
+            $un = @unserialize( $value, ['allowed_classes' => false] );
+            if ( $un !== false || $value === 'b:0;' ) {
+                if ( $contains_object( $un ) ) {
+                    return $value;
+                }
+                return $un;
+            }
+        }
+
+        $un = @unserialize( $value, ['allowed_classes' => false] );
+
+        if ( $un !== false || $value === 'b:0;' ) {
+            if ( $contains_object( $un ) ) {
+                return $value;
+            }
+            return $un;
+        }
+
+        return $value;
+    };
+
     foreach ( $meta_rows as $meta ) {
         $user_metas[] = [
             'meta_key'   => (string) $meta['meta_key'],
-            'meta_value' => maybe_unserialize( $meta['meta_value'] )
+            'meta_value' => $safe_unserialize( $meta['meta_value'] )
         ];
     }
 
@@ -416,7 +530,7 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     if ( $user_metas ) {
         foreach ( $user_metas as $m ) {
             $mk = (string) $m['meta_key'];
-            $mv = $m['meta_value'];
+            $mv = $safe_unserialize( $m['meta_value'] );
             $source_meta[ $mk ][] = $mv;
         }
 
@@ -510,7 +624,7 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
                     continue;
                 }
 
-                update_user_meta( $target_user_id, $k, maybe_unserialize( $v ) );
+                update_user_meta( $target_user_id, $k, $safe_unserialize( $v ) );
             }
         }
 
