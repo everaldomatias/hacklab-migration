@@ -401,12 +401,12 @@ function remote_get_posts( array $args = [] ) {
     if ( $tax_query ) {
         if ( isset( $tax_query['taxonomy'] ) ) {
             $tax_relation = 'AND';
-            $tax_queries = [ $tax_query ];
+            $tax_queries  = [ $tax_query ];
         } else {
             $tax_relation = strtoupper( (string) ( $tax_query['relation'] ?? 'AND' ) );
             $tax_relation = in_array( $tax_relation, [ 'AND', 'OR' ], true ) ? $tax_relation : 'AND';
 
-            foreach ( $tax_queries as $k => $clause ) {
+            foreach ( $tax_query as $k => $clause ) {
                 if ( $k === 'relation' ) {
                     continue;
                 }
@@ -418,7 +418,6 @@ function remote_get_posts( array $args = [] ) {
                 $tax_queries[] = $clause;
             }
         }
-
     }
 
     if ( $tax_queries ) {
