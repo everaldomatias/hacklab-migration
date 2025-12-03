@@ -149,7 +149,7 @@ function import_remote_users( array $args ) : array {
                 $uid = (int) $mr['user_id'];
                 $meta_by_user[$uid][] = [
                     'meta_key'   => (string) $mr['meta_key'],
-                    'meta_value' => (string) $mr['meta_value']
+                    'meta_value' => maybe_unserialize( $mr['meta_value'] )
                 ];
             }
 
@@ -230,12 +230,28 @@ function import_remote_users( array $args ) : array {
                     }
 
                     $user_metas = $meta_by_user[$rid] ?? [];
+                    $source_meta = [];
 
                     if ( $user_metas ) {
-                        $user_metas = normalize_remote_usermetas_for_target( $user_metas, $local_prefix, $blog_id, $remote_prefix );
+                        foreach ( $user_metas as $raw_meta ) {
+                            $mk = (string) $raw_meta['meta_key'];
+                            $mv = $raw_meta['meta_value'];
 
-                        foreach( $user_metas as $m ) {
-                            $k = $m['meta_key'];
+                            $source_meta[ $mk ][] = $mv;
+                        }
+
+                        foreach ( $source_meta as $mk => $values ) {
+                            $source_meta[ $mk ] = count( $values ) === 1 ? $values[0] : $values;
+                        }
+                    }
+
+                    $normalized_user_metas = $user_metas
+                        ? normalize_remote_usermetas_for_target( $user_metas, $local_prefix, $blog_id, $remote_prefix )
+                        : [];
+
+                    if ( $normalized_user_metas ) {
+                        foreach( $normalized_user_metas as $m ) {
+                            $k = (string) $m['meta_key'];
                             $v = $m['meta_value'];
 
                             if ( $k === '_hacklab_migration_source_id' || $k === '_hacklab_migration_source_blog' ) {
@@ -251,6 +267,8 @@ function import_remote_users( array $args ) : array {
                     if ( $blog_id ) {
                         update_user_meta( $target_user_id, '_hacklab_migration_source_blog', (int) $blog_id );
                     }
+
+                    update_user_meta( $target_user_id, '_hacklab_migration_source_meta', $source_meta );
 
                     $result['map'][$rid] = (int) $target_user_id;
 
@@ -276,42 +294,29 @@ function import_remote_users( array $args ) : array {
  * - Preserva TODAS as chaves originais.
  * - Adiciona também a variante local (ex.: 'wp_capabilities' e 'wp_user_level') baseada nas chaves do blog remoto.
  *
- * @param array<int,array{meta_key:string,meta_value:string}> $metas
+ * @param array<int,array{meta_key:string,meta_value:mixed}> $metas
  * @param string $local_prefix Ex.: 'wp_'
  * @param int|null $blog_id
- * @return array<int,array{meta_key:string,meta_value:string}>
+ * @return array<int,array{meta_key:string,meta_value:mixed}>
  */
 function normalize_remote_usermetas_for_target( array $metas, string $local_prefix, ?int $blog_id, string $remote_prefix = 'wp_' ) : array {
     if ( ! $blog_id || $blog_id <= 1 ) {
         return $metas;
     }
 
-    $out = $metas;
-    $remote_caps_key  = sprintf( '%s%d_capabilities', $remote_prefix, $blog_id );
-    $remote_level_key = sprintf( '%s%d_user_level',   $remote_prefix, $blog_id );
-
-    $caps_value  = null;
-    $level_value = null;
+    $remote_blog_prefix = sprintf( '%s%d_', $remote_prefix, $blog_id );
+    $out = [];
 
     foreach ( $metas as $m ) {
-        if ( $m['meta_key'] === $remote_caps_key ) {
-            $caps_value = $m['meta_value'];
-        } elseif ( $m['meta_key'] === $remote_level_key ) {
-            $level_value = $m['meta_value'];
+        $key = (string) $m['meta_key'];
+
+        if ( strpos( $key, $remote_blog_prefix ) === 0 ) {
+            $key = $local_prefix . substr( $key, strlen( $remote_blog_prefix ) );
         }
-    }
 
-    if ( $caps_value !== null ) {
         $out[] = [
-            'meta_key'   => $local_prefix . 'capabilities', // ex.: 'wp_capabilities'
-            'meta_value' => $caps_value,
-        ];
-    }
-
-    if ( $level_value !== null ) {
-        $out[] = [
-            'meta_key'   => $local_prefix . 'user_level',
-            'meta_value' => $level_value,
+            'meta_key'   => $key,
+            'meta_value' => $m['meta_value'],
         ];
     }
 
