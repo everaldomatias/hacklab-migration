@@ -148,16 +148,61 @@ function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, ar
         $prepared .= " ORDER BY tr.object_id ASC, tt.taxonomy ASC, t.name ASC";
 
         $rows = $ext->get_results( $prepared, ARRAY_A ) ?: [];
+
+        $meta_by_term = [];
+        if ( $rows && ! empty( $tables['termmeta'] ) ) {
+            $term_ids = array_values( array_unique( array_map(
+                static fn( $row ) => (int) ( $row['term_id'] ?? 0 ),
+                $rows
+            ) ) );
+
+            if ( $term_ids ) {
+                $ph_meta   = implode( ',', array_fill( 0, count( $term_ids ), '%d' ) );
+                $meta_sql  = "
+                    SELECT term_id, meta_key, meta_value
+                      FROM {$tables['termmeta']}
+                     WHERE term_id IN ({$ph_meta})
+                     ORDER BY meta_id ASC
+                ";
+                $meta_stmt = $ext->prepare( $meta_sql, ...$term_ids );
+
+                if ( $meta_stmt === null ) {
+                    $ids_str = implode( ',', array_map( 'intval', $term_ids ) );
+                    $meta_stmt = "
+                        SELECT term_id, meta_key, meta_value
+                          FROM {$tables['termmeta']}
+                         WHERE term_id IN ({$ids_str})
+                         ORDER BY meta_id ASC
+                    ";
+                }
+
+                $meta_rows = $ext->get_results( $meta_stmt, ARRAY_A ) ?: [];
+                foreach ( $meta_rows as $meta_row ) {
+                    $tid = (int) ( $meta_row['term_id'] ?? 0 );
+                    if ( $tid <= 0 ) {
+                        continue;
+                    }
+
+                    $meta_by_term[ $tid ][] = [
+                        'meta_key'   => (string) ( $meta_row['meta_key']   ?? '' ),
+                        'meta_value' => (string) ( $meta_row['meta_value'] ?? '' ),
+                    ];
+                }
+            }
+        }
+
         foreach ( $rows as $r ) {
             $pid = (int) ( $r['post_id'] ?? 0 );
             if ( $pid <= 0 ) { continue; }
             $tx  = (string) ( $r['taxonomy'] ?? '' );
             if ( $tx === '' ) { continue; }
+            $rid = (int) ( $r['term_id'] ?? 0 );
 
             $out[ $pid ][ $tx ][] = [
-                'term_id' => (int) ( $r['term_id'] ?? 0 ),
+                'term_id' => $rid,
                 'name'    => (string) ( $r['name']    ?? '' ),
                 'slug'    => (string) ( $r['slug']    ?? '' ),
+                'meta'    => $meta_by_term[ $rid ] ?? [],
             ];
         }
     }
@@ -165,12 +210,13 @@ function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, ar
     return $out;
 }
 
-function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_by_tax, array $tax_map = [] ) : void {
+function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_by_tax, array $tax_map = [], ?int $blog_id = null ) : void {
     if ( ! $terms_by_tax ) return;
 
     $allowed_tax = array_fill_keys( get_object_taxonomies( $post_type, 'names' ), true );
 
     static $term_cache = [];
+    static $meta_synced = [];
 
     foreach ( $terms_by_tax as $remote_tax => $term_list ) {
         $local_tax = $tax_map[$remote_tax] ?? $remote_tax;
@@ -187,6 +233,8 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
         foreach ( $term_list as $t ) {
             $name = (string) ( $t['name'] ?? '' );
             $slug = (string) ( $t['slug'] ?? '' );
+            $remote_term_id = (int) ( $t['term_id'] ?? 0 );
+            $term_meta      = is_array( $t['meta'] ?? null ) ? $t['meta'] : [];
 
             if ( $slug === '' && $name !== '' ) {
                 $slug = sanitize_title( $name );
@@ -195,61 +243,95 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
                 continue;
             }
 
+            $local_term_id = 0;
+
             if ( isset( $term_cache[ $local_tax ][ $slug ] ) ) {
-                $to_set[] = (int) $term_cache[ $local_tax ][ $slug ];
+                $local_term_id = (int) $term_cache[ $local_tax ][ $slug ];
+            }
+
+            if ( $local_term_id <= 0 ) {
+                $exists = term_exists( $slug, $local_tax );
+
+                if ( ! $exists && $name !== '' ) {
+                    $exists = term_exists( $name, $local_tax );
+                }
+
+                if ( $exists && ! is_wp_error( $exists ) ) {
+                    $local_term_id = is_array( $exists ) ? (int) ( $exists['term_id'] ?? 0 ) : (int) $exists;
+                }
+            }
+
+            if ( $local_term_id <= 0 ) {
+                $insert_args = [];
+
+                if ( $slug !== '' ) {
+                    $insert_args['slug'] = $slug;
+                }
+
+                if ( ! empty( $t['parent_slug'] ) || ! empty( $t['parent_name'] ) ) {
+                    $parent_slug = (string) ( $t['parent_slug'] ?? '' );
+                    $parent_name = (string) ( $t['parent_name'] ?? '' );
+                    $parent_id   = 0;
+
+                    if ( $parent_slug !== '' ) {
+                        $parent_exists = term_exists( $parent_slug, $local_tax );
+                        if ( ! $parent_exists && $parent_name !== '' ) {
+                            $parent_exists = term_exists( $parent_name, $local_tax );
+                        }
+                        if ( $parent_exists && ! is_wp_error( $parent_exists ) ) {
+                            $parent_id = is_array( $parent_exists ) ? (int) ( $parent_exists['term_id'] ?? 0 ) : (int) $parent_exists;
+                        } elseif ( $parent_name !== '' ) {
+                            $parent_ins = wp_insert_term( $parent_name, $local_tax, [ 'slug' => sanitize_title( $parent_slug ?: $parent_name ) ] );
+                            if ( ! is_wp_error( $parent_ins ) ) {
+                                $parent_id = (int) ( $parent_ins['term_id'] ?? 0 );
+                            }
+                        }
+                    }
+                    if ( $parent_id > 0 ) {
+                        $insert_args['parent'] = $parent_id;
+                    }
+                }
+
+                $ins = wp_insert_term( $name !== '' ? $name : $slug, $local_tax, $insert_args );
+                if ( ! is_wp_error( $ins ) && ! empty( $ins['term_id'] ) ) {
+                    $local_term_id = (int) $ins['term_id'];
+                }
+            }
+
+            if ( $local_term_id <= 0 ) {
                 continue;
             }
 
-            $exists = term_exists( $slug, $local_tax );
+            $term_cache[ $local_tax ][ $slug ] = $local_term_id;
+            $to_set[] = $local_term_id;
 
-            if ( ! $exists && $name !== '' ) {
-                $exists = term_exists( $name, $local_tax );
-            }
+            $meta_sync_key = $local_term_id . '|' . ( $blog_id ?? 0 );
+            if ( ! isset( $meta_synced[ $meta_sync_key ] ) ) {
+                if ( $term_meta ) {
+                    foreach ( $term_meta as $m ) {
+                        $k = $m['meta_key']   ?? '';
+                        $v = $m['meta_value'] ?? '';
 
-            if ( $exists && ! is_wp_error( $exists ) ) {
-                $term_id = is_array( $exists ) ? (int) ( $exists['term_id'] ?? 0 ) : (int) $exists;
-                if ( $term_id > 0 ) {
-                    $term_cache[ $local_tax ][ $slug ] = $term_id;
-                    $to_set[] = $term_id;
-                    continue;
-                }
-            }
-
-            $insert_args = [];
-
-            if ( $slug !== '' ) {
-                $insert_args['slug'] = $slug;
-            }
-
-            if ( ! empty( $t['parent_slug'] ) || ! empty( $t['parent_name'] ) ) {
-                $parent_slug = (string) ( $t['parent_slug'] ?? '' );
-                $parent_name = (string) ( $t['parent_name'] ?? '' );
-                $parent_id   = 0;
-
-                if ( $parent_slug !== '' ) {
-                    $parent_exists = term_exists( $parent_slug, $local_tax );
-                    if ( ! $parent_exists && $parent_name !== '' ) {
-                        $parent_exists = term_exists( $parent_name, $local_tax );
-                    }
-                    if ( $parent_exists && ! is_wp_error( $parent_exists ) ) {
-                        $parent_id = is_array( $parent_exists ) ? (int) ( $parent_exists['term_id'] ?? 0 ) : (int) $parent_exists;
-                    } elseif ( $parent_name !== '' ) {
-                        $parent_ins = wp_insert_term( $parent_name, $local_tax, [ 'slug' => sanitize_title( $parent_slug ?: $parent_name ) ] );
-                        if ( ! is_wp_error( $parent_ins ) ) {
-                            $parent_id = (int) ( $parent_ins['term_id'] ?? 0 );
+                        if ( $k === '' ) {
+                            continue;
                         }
+
+                        if ( $k === '_hacklab_migration_source_id' || $k === '_hacklab_migration_source_blog' ) {
+                            continue;
+                        }
+
+                        update_term_meta( $local_term_id, (string) $k, maybe_unserialize( $v ) );
                     }
                 }
-                if ( $parent_id > 0 ) {
-                    $insert_args['parent'] = $parent_id;
-                }
-            }
 
-            $ins = wp_insert_term( $name !== '' ? $name : $slug, $local_tax, $insert_args );
-            if ( ! is_wp_error( $ins ) && ! empty( $ins['term_id'] ) ) {
-                $term_id = (int) $ins['term_id'];
-                $term_cache[ $local_tax ][ $slug ] = $term_id;
-                $to_set[] = $term_id;
+                if ( $remote_term_id > 0 ) {
+                    update_term_meta( $local_term_id, '_hacklab_migration_source_id', $remote_term_id );
+                    if ( $blog_id ) {
+                        update_term_meta( $local_term_id, '_hacklab_migration_source_blog', $blog_id );
+                    }
+                }
+
+                $meta_synced[ $meta_sync_key ] = true;
             }
         }
 

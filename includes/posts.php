@@ -160,7 +160,7 @@ function import_remote_posts( array $args = [] ): array {
             unset( $row_terms['author'] );
         }
 
-        ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms );
+        ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms, [], $blog_id );
 
         // Com o parâmetro 'fn_pos' é possível alterar os dados do post depois de ser criado no WP local.
         if ( ! empty( $options['fn_pos'] ) && is_callable( $options['fn_pos'] ) ) {
