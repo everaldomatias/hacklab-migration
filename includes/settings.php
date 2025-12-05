@@ -17,7 +17,7 @@ add_action( 'admin_post_hm_export_meta', __NAMESPACE__ . '\\export_remote_meta_c
 function add_admin_menu() {
      add_menu_page(
         __( 'Migração', 'hacklabr' ),
-        __( 'Migração', 'hacklabr' ),
+        __( 'h/ Migração', 'hacklabr' ),
         HACKLAB_MIGRATION_CAP,
         'hacklab-migration',
         function () {
