@@ -325,10 +325,14 @@ class Commands {
         ];
 
         if ( empty( $args[0] ) ) {
-            \WP_CLI::error( 'Você deve informar <remote_user_id>. Ex: wp run-import-user 123 --blog_id=1' );
+            \WP_CLI::error( 'Você deve informar <remote_user_id>. Ex: wp import-user 123 --blog_id=1' );
         }
 
         $remote_user_id = (int) $args[0];
+
+        if ( $remote_user_id <= 0 ) {
+            \WP_CLI::error( 'O <remote_user_id> precisa ser um inteiro positivo.' );
+        }
 
         $options = wp_parse_args( $command_args, $defaults );
 
