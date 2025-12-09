@@ -94,7 +94,27 @@ function import_remote_attachments( array $args = [] ) : array {
         $thumb_lid = (int) ( $summary['map'][$thumb_rid] ?? 0 ); // Local thumbnail id
 
         if ( $thumb_lid <= 0 ) {
-            continue;
+            $remote_attached = (string) ( $post_meta['_wp_attached_file'] ?? '' );
+            if ( $remote_attached !== '' ) {
+                $candidate = normalize_attached_file_for_single( $remote_attached, $blog_id );
+                $existing = get_posts( [
+                    'post_type'      => 'attachment',
+                    'posts_per_page' => 1,
+                    'post_status'    => 'any',
+                    'meta_key'       => '_wp_attached_file',
+                    'meta_value'     => $candidate,
+                    'fields'         => 'ids',
+                    'no_found_rows'  => true,
+                ] );
+
+                if ( $existing ) {
+                    $thumb_lid = (int) $existing[0];
+                }
+            }
+
+            if ( $thumb_lid <= 0 ) {
+                continue;
+            }
         }
 
         if ( ! $options['dry_run'] ) {
@@ -591,7 +611,7 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
 
                 $summary['map'][$rid] = $att_id;
             } else {
-                $summary['missing_files'][] = (string) ( $rmeta['_wp_attached_file'] ?? '' );
+                $summary['missing_files'][ $rid ] = (string) ( $rmeta['_wp_attached_file'] ?? '' );
             }
         }
     }
