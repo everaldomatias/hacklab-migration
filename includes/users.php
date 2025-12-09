@@ -99,6 +99,11 @@ function import_remote_users( array $args ) : array {
     $ids_sql .= " ORDER BY u.ID ASC";
 
     $ids_stmt   = $params ? $ext->prepare( $ids_sql, $params ) : $ids_sql;
+    if ( $params && $ids_stmt === null ) {
+        $result['errors'][] = 'Falha ao preparar consulta de usuários remotos.';
+        return $result;
+    }
+
     $remote_ids = $ext->get_col( $ids_stmt );
     $remote_ids = array_values( array_map( 'intval', (array) $remote_ids ) );
 
@@ -184,7 +189,13 @@ function import_remote_users( array $args ) : array {
                 ORDER BY u.ID ASC
             ";
 
-            $rows = $ext->get_results( $ext->prepare( $users_sql, $ids ), ARRAY_A ) ?: [];
+            $users_stmt = $ext->prepare( $users_sql, $ids );
+            if ( $users_stmt === null ) {
+                $result['errors'][] = 'Falha ao preparar consulta de usuários remotos.';
+                continue;
+            }
+
+            $rows = $ext->get_results( $users_stmt, ARRAY_A ) ?: [];
 
             if ( ! $rows ) {
                 continue;
@@ -197,7 +208,13 @@ function import_remote_users( array $args ) : array {
                 ORDER BY um.umeta_id ASC
             ";
 
-            $meta_rows = $ext->get_results( $ext->prepare( $meta_sql, $ids ), ARRAY_A ) ?: [];
+            $meta_stmt = $ext->prepare( $meta_sql, $ids );
+            if ( $meta_stmt === null ) {
+                $result['errors'][] = 'Falha ao preparar consulta de metadados de usuários remotos.';
+                continue;
+            }
+
+            $meta_rows = $ext->get_results( $meta_stmt, ARRAY_A ) ?: [];
             $meta_by_user = [];
 
             foreach( $meta_rows as $mr ) {
