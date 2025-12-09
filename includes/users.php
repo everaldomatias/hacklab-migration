@@ -15,7 +15,7 @@ function import_remote_users( array $args ) : array {
     global $wpdb;
 
     $defaults = [
-        'blog_id'     => null,
+        'blog_id'     => 1,
         'include_ids' => [],
         'exclude_ids' => [],
         'chunk'       => 500,
@@ -68,7 +68,7 @@ function import_remote_users( array $args ) : array {
     $clauses = [];
     $params  = [];
 
-    if ( $o['blog_id'] ) {
+    if ( $o['blog_id'] && (int) $o['blog_id'] > 1 ) {
         $rbid = (int) $o['blog_id'];
 
         $base_prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
@@ -115,7 +115,7 @@ function import_remote_users( array $args ) : array {
 
     $chunk        = max( 1, (int) $o['chunk'] );
     $local_prefix = $wpdb->get_blog_prefix( 0 );
-    $blog_id      = $o['blog_id'] ? (int) $o['blog_id'] : null;
+    $blog_id      = max( 1, (int) $o['blog_id'] );
 
     if ( ! $o['dry_run'] ) {
         $off_email_filters();
@@ -436,7 +436,7 @@ function get_user_by_meta_data( string $meta_key, $meta_value ): int {
     return (int) $user_id;
 }
 
-function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dry_run = false ): int {
+function import_remote_user( int $remote_user_id, int $blog_id = 1, bool $dry_run = false ): int {
     global $wpdb;
 
     $ext = get_external_wpdb();
@@ -540,7 +540,7 @@ function import_remote_user( int $remote_user_id, ?int $blog_id = null, bool $dr
     ];
 
     $local_prefix = $wpdb->get_blog_prefix( 0 );
-    $target_blog_id = $blog_id ? (int) $blog_id : null;
+    $target_blog_id = max( 1, (int) $blog_id );
 
     $source_meta = [];
 
