@@ -148,8 +148,9 @@ class Commands {
                     break;
 
                 case 'media':
-                    // media = 0 ou media = false => não processa mídia
-                    $options['media'] = self::to_bool( $argument_value, true );
+                case 'with_media':
+                    // media/with_media = 0 ou false => não processa mídia
+                    $options['with_media'] = self::to_bool( $argument_value, true );
                     break;
 
                 case 'fn_pre':
@@ -189,9 +190,10 @@ class Commands {
             }
         }
 
-        if ( ! array_key_exists( 'media', $options ) ) {
-            $options['media'] = true;
+        if ( ! array_key_exists( 'with_media', $options ) ) {
+            $options['with_media'] = true;
         }
+
         if ( ! array_key_exists( 'dry_run', $options ) ) {
             $options['dry_run'] = false;
         }
