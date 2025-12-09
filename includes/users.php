@@ -251,8 +251,20 @@ function import_remote_users( array $args ) : array {
                 if ( ! $o['dry_run'] ) {
                     // Usuário não existe no WP local, cria
                     if ( $target_user_id <= 0 ) {
+                        $exists_by_email = $email !== '' ? get_user_by( 'email', $email ) : false;
+                        if ( $exists_by_email instanceof \WP_User ) {
+                            $target_user_id = (int) $exists_by_email->ID;
+                        }
+
+                        $candidate_login = $login;
+                        $suffix = 1;
+                        while ( username_exists( $candidate_login ) ) {
+                            $candidate_login = $login . '_' . $suffix;
+                            $suffix++;
+                        }
+
                         $userdata = [
-                            'user_login'    => $login,
+                            'user_login'    => $candidate_login,
                             'user_email'    => $email,
                             'user_nicename' => (string) $u['user_nicename'],
                             'user_url'      => (string) $u['user_url'],
@@ -386,14 +398,18 @@ function normalize_remote_usermetas_for_target( array $metas, string $local_pref
     foreach ( $metas as $m ) {
         $key = (string) $m['meta_key'];
 
-        if ( strpos( $key, $remote_blog_prefix ) === 0 ) {
-            $key = $local_prefix . substr( $key, strlen( $remote_blog_prefix ) );
-        }
-
         $out[] = [
             'meta_key'   => $key,
             'meta_value' => $m['meta_value'],
         ];
+
+        if ( strpos( $key, $remote_blog_prefix ) === 0 ) {
+            $local_key = $local_prefix . substr( $key, strlen( $remote_blog_prefix ) );
+            $out[] = [
+                'meta_key'   => $local_key,
+                'meta_value' => $m['meta_value'],
+            ];
+        }
     }
 
     return $out;
