@@ -211,6 +211,14 @@ class Commands {
         \WP_CLI::log( 'Iniciando run_import()...' );
         $summary = run_import( $options );
 
+        if ( is_wp_error( $summary ) ) {
+            \WP_CLI::error( $summary->get_error_message() );
+        }
+
+        if ( ! is_array( $summary ) ) {
+            \WP_CLI::error( 'run_import() retornou um resultado inválido.' );
+        }
+
         if ( ! empty( $summary['errors'] ) && is_array( $summary['errors'] ) ) {
             foreach ( $summary['errors'] as $err ) {
                 \WP_CLI::warning( (string) $err );
