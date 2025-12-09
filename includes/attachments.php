@@ -204,12 +204,29 @@ function import_remote_attachments( array $args = [] ) : array {
  */
 function normalize_attached_file_for_single( string $attached_file, ?int $remote_blog_id ): string {
     $attached_file = ltrim( $attached_file, '/' );
+
     if ( $remote_blog_id && $remote_blog_id > 1 ) {
         $prefix = 'sites/' . (int) $remote_blog_id . '/';
         if ( strpos( $attached_file, $prefix ) === 0 ) {
             $attached_file = substr( $attached_file, strlen( $prefix ) );
         }
+
+        $dir  = '';
+        $file = $attached_file;
+
+        if ( strpos( $attached_file, '/' ) !== false ) {
+            $dir  = dirname( $attached_file );
+            $file = basename( $attached_file );
+            $dir  = $dir === '.' ? '' : $dir;
+        }
+
+        if ( $file !== '' && strpos( $file, $remote_blog_id . '_' ) !== 0 ) {
+            $file = $remote_blog_id . '_' . $file;
+        }
+
+        $attached_file = $dir !== '' ? trailingslashit( $dir ) . $file : $file;
     }
+
     return $attached_file;
 }
 
@@ -315,12 +332,34 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
     $remote_attached = (string) ($rmeta['_wp_attached_file'] ?? '');
     if ($remote_attached === '') return 0;
 
-    $attached_file = normalize_attached_file_for_single( $remote_attached, $remote_blog_id );
-    $file_abs = trailingslashit( $uploads['basedir'] ) . $attached_file;
+    $primary_attached = normalize_attached_file_for_single( $remote_attached, $remote_blog_id );
+    $candidates = [$primary_attached];
 
-    if ( ! file_exists( $file_abs ) ) {
+    if ( $remote_blog_id && $remote_blog_id > 1 ) {
+        $legacy = ltrim( $remote_attached, '/' );
+        $prefix = 'sites/' . (int) $remote_blog_id . '/';
+        if ( strpos( $legacy, $prefix ) === 0 ) {
+            $legacy = substr( $legacy, strlen( $prefix ) );
+        }
+        if ( $legacy !== $primary_attached ) {
+            $candidates[] = $legacy;
+        }
+    }
+
+    $attached_file = '';
+    foreach ( $candidates as $candidate ) {
+        $file_abs = trailingslashit( $uploads['basedir'] ) . $candidate;
+        if ( file_exists( $file_abs ) ) {
+            $attached_file = $candidate;
+            break;
+        }
+    }
+
+    if ( $attached_file === '' ) {
         return 0;
     }
+
+    $file_abs = trailingslashit( $uploads['basedir'] ) . $attached_file;
 
     // evita duplicar por attached_file
     $existing = get_posts( [
