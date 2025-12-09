@@ -79,8 +79,8 @@ function import_remote_posts( array $args = [] ): array {
 
         $postarr = [
             'post_title'    => (string) $row['post_title'],
-            'post_content'  => (string) $row['post_content'],
-            'post_excerpt'  => (string) ( $row['post_excerpt'] ?? '' ),
+            'post_content'  => (string) ( $row['post_content'] ? apply_text_filters( $row['post_content'], $row, $options ) : '' ),
+            'post_excerpt'  => (string) ( $row['post_excerpt'] ? apply_text_filters( $row['post_excerpt'], $row, $options ) : '' ),
             'post_status'   => in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'draft',
             'post_type'     => $remote_type,
             'post_date'     => (string) $row['post_date'],

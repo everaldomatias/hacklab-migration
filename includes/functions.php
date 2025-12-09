@@ -425,7 +425,7 @@ function remote_get_posts( array $args = [] ) {
 
     $defaults = [
         'post_type'         => 'post',
-        'post_status'       => 'publish',
+        'post_status'       => ['publish', 'pending', 'draft', 'future', 'private'],
         'numberposts'       => 10,
         'offset'            => 0,
         'orderby'           => 'post_date',
@@ -899,4 +899,95 @@ function get_remote_post_types( int $blog_id ): array {
     }
 
     return array_values( array_filter( array_map( 'sanitize_key', $types ) ) );
+}
+
+/**
+ * Aplica filtros de conteúdo ao texto fornecido.
+
+ * @param string $content O conteúdo a ser filtrado.
+ * @param array $row (Opcional) Dados adicionais associados ao conteúdo. Padrão é um array vazio.
+ * @param array $options (Opcional) Opções adicionais para o processamento. Padrão é um array vazio.
+ *
+ * @return string O conteúdo filtrado.
+ */
+function apply_text_filters( string $content, array $row = [], array $options = [] ): string {
+    $content = remove_divi_tags( $content );
+    return $content;
+}
+
+/**
+ * Remove tags e marcações específicas do tema Divi do conteúdo fornecido.
+ *
+ * Esta função processa o conteúdo (string) e remove elementos gerados pelo
+ * construtor Divi que podem incluir:
+ *  - shortcodes do Divi (ex.: [et_pb_section], [et_pb_row], [et_pb_column], ...),
+ *  - wrappers e comentários inseridos pelo builder,
+ *  - classes e atributos auxiliares (ex.: et_pb_*, et_builder_inner_content, ...).
+ *
+ * O objetivo é limpar o HTML para uso em contextos que não precisam ou não
+ * suportam as marcações do Divi (por exemplo, migração de conteúdo, exibição
+ * em temas distintos ou exportação). A função retorna o conteúdo modificado,
+ * preservando o restante do HTML e do texto.
+ *
+ * @param string $content Conteúdo HTML/texto que será processado e limpo.
+ * @return string Conteúdo processado sem as marcações/shortcodes específicos do Divi.
+ * @example
+ * // Exemplo:
+ * // $clean = remove_divi_tags( $raw_content );
+ * // echo $clean;
+ *
+ * @see https://www.elegantthemes.com/documentation/divi/
+ */
+
+function remove_divi_tags( $content ) {
+    /*
+     * 1. Extrai conteúdo interno de [et_pb_text]
+     *    (mantém texto interno, remove o shortcode)
+     */
+    $content = preg_replace(
+        '/\[et_pb_text[^\]]*\](.*?)\[\/et_pb_text\]/mis',
+        '$1',
+        $content
+    );
+
+    /*
+     * 2. Extrai imagens de [et_pb_image ...]
+     *    Mantém todos os atributos.
+     *    Exemplo: [et_pb_image src="x.jpg" alt="y"]
+     *    → <img src="x.jpg" alt="y">
+     */
+    $content = preg_replace(
+        '/\[et_pb_image(.*?)\]/mis',
+        '<img$1>',
+        $content
+    );
+
+    /*
+     * 3. Extrai iframes de [iframe ...] caso você use este shortcode
+     *    Mantém todos os atributos.
+     */
+    $content = preg_replace(
+        '/\[iframe(.*?)\]/mis',
+        '<iframe$1></iframe>',
+        $content
+    );
+
+    /*
+     * 4. Remove qualquer outro shortcode do Divi
+     *    Pega tudo que começa com [et_pb_ ...]
+     *    Ex: [et_pb_row], [/et_pb_section], [et_pb_button ... /], etc
+     */
+    $content = preg_replace(
+        '/\[\/?et_pb_[^\]]*\]/mis',
+        '',
+        $content
+    );
+
+    /*
+     * 5. Remove sobras de múltiplas quebras de linha causadas pela remoção
+     */
+    $content = preg_replace( '/[\r\n]+/', "\n", $content );
+    $content = trim( $content );
+
+    return $content;
 }
