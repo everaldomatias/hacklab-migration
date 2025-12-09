@@ -289,7 +289,12 @@ function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = nul
              WHERE p.ID IN ({$ph}) AND p.post_type='attachment'
         ";
 
-        $rows = $ext->get_results( $ext->prepare( $sql, $ids ), ARRAY_A) ?: [];
+        $stmt = $ext->prepare( $sql, $ids );
+        if ( $stmt === null ) {
+            return [];
+        }
+
+        $rows = $ext->get_results( $stmt, ARRAY_A) ?: [];
         if ( ! $rows ) {
             continue;
         }
@@ -307,7 +312,12 @@ function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = nul
              WHERE post_id IN ({$ph}) AND meta_key IN ({$phk})
         ";
 
-        $meta_rows = $ext->get_results( $ext->prepare( $sqlm, array_merge( $ids, $meta_keys ) ), ARRAY_A ) ?: [];
+        $meta_stmt = $ext->prepare( $sqlm, array_merge( $ids, $meta_keys ) );
+        if ( $meta_stmt === null ) {
+            return [];
+        }
+
+        $meta_rows = $ext->get_results( $meta_stmt, ARRAY_A ) ?: [];
         $by_post = [];
         foreach ( $meta_rows as $m ) {
             $pid = (int) $m['post_id'];
