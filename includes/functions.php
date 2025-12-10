@@ -480,7 +480,7 @@ function get_remote_posts( array $args = [] ) {
 
     $defaults = [
         'post_type'         => 'post',
-        'post_status'       => ['publish', 'pending', 'draft', 'future', 'private'],
+        'post_status'       => 'publish',
         'numberposts'       => 10,
         'offset'            => 0,
         'orderby'           => 'post_date',
