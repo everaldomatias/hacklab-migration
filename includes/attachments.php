@@ -342,7 +342,62 @@ function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = nul
         foreach ( $meta_rows as $m ) {
             $pid = (int) $m['post_id'];
             $k   = (string) $m['meta_key'];
-            $v   = maybe_unserialize( $m['meta_value'] );
+            $contains_object = static function ( $val ) use ( &$contains_object ): bool {
+                if ( is_object( $val ) ) {
+                    return true;
+                }
+
+                if ( is_array( $val ) ) {
+                    foreach ( $val as $vv ) {
+                        if ( $contains_object( $vv ) ) {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            };
+
+            $safe_unserialize = static function ( $value ) use ( $contains_object ) {
+                if ( is_object( $value ) ) {
+                    return maybe_serialize( $value );
+                }
+
+                if ( is_array( $value ) && $contains_object( $value ) ) {
+                    return maybe_serialize( $value );
+                }
+
+                if ( ! is_string( $value ) ) {
+                    return $value;
+                }
+
+                if ( ! is_serialized( $value ) ) {
+                    return $value;
+                }
+
+                if ( preg_match( '/^[OCais]:/i', ltrim( $value ) ) ) {
+                    $un = @unserialize( $value, ['allowed_classes' => false] );
+                    if ( $un !== false || $value === 'b:0;' ) {
+                        if ( $contains_object( $un ) ) {
+                            return $value;
+                        }
+                        return $un;
+                    }
+                }
+
+                $un = @unserialize( $value, ['allowed_classes' => false] );
+
+                if ( $un !== false || $value === 'b:0;' ) {
+                    if ( $contains_object( $un ) ) {
+                        return $value;
+                    }
+                    return $un;
+                }
+
+                return $value;
+            };
+
+            $v   = $safe_unserialize( $m['meta_value'] );
             $by_post[$pid][$k] = $v;
         }
 
