@@ -124,7 +124,7 @@ class Commands {
                         break;
 
                     case 'post_modified_gmt':
-                        // aceita timestamp ou string; remote_get_posts trata depois
+                        // aceita timestamp ou string; get_remote_posts trata depois
                         if ( is_numeric( $argument_value ) ) {
                             $fetch['post_modified_gmt'] = (int) $argument_value;
                         } else {
@@ -177,6 +177,15 @@ class Commands {
                 default:
                     break;
             }
+        }
+
+        /**
+         * Retorna posts de todos status quando recebe `any` como parâmetro
+         *
+         * @link https://developer.wordpress.org/reference/classes/wp_query/#status-parameters
+         */
+        if ( $fetch['post_status'] === 'any' ) {
+            $fetch['post_status'] = ['publish', 'pending', 'draft', 'future', 'private'];
         }
 
         if ( $tax_query_clauses ) {
@@ -355,13 +364,10 @@ class Commands {
      * usuários de forma massiva, com filtros opcionais por blog (em multisite),
      * lista de IDs a incluir e lista de IDs a excluir.
      *
-     * ## OPTIONS
+     * [<blog_id>]
+     * : ID do blog remoto em instalações multisite. Se omitido, importa de todos.
      *
-     * [--blog_id=<id>]
-     * : ID do blog remoto em instalações multisite. Em um multisite clássico,
-     *   esse valor corresponde ao número do site (ex.: 2, 3, 4). Se omitido,
-     *   todos os usuários da tabela remota serão considerados (sem filtro
-     *   por capabilities de blog).
+     * ## OPTIONS
      *
      * [--include_ids=<ids>]
      * : Lista de IDs remotos a incluir, separados por vírgula. Ex.: "10,20,30".
@@ -383,25 +389,24 @@ class Commands {
      * ## EXAMPLES
      *
      *     # Importa todos os usuários do blog 4 (multisite remoto):
-     *     wp import-users --blog_id=4
+     *     wp import-users 4
      *
      *     # Importa apenas usuários específicos (IDs 10, 20, 30) do blog 2:
-     *     wp import-users --blog_id=2 --include_ids=10,20,30
+     *     wp import-users 2 --include_ids=10,20,30
      *
      *     # Importa todos os usuários exceto os IDs 5,6,7:
      *     wp import-users --exclude_ids=5,6,7
      *
      *     # Executa em modo de simulação (sem gravar nada) para o blog 3:
-     *     wp import-users --blog_id=3 --dry_run
+     *     wp import-users 3 --dry_run
      *
-     * @param array $args         Argumentos posicionais (não utilizados neste comando).
-     * @param array $command_args Argumentos nomeados/associativos (blog_id, include_ids, exclude_ids, chunk, dry_run).
+     * @param array $args         Argumentos posicionais ([<blog_id>]).
+     * @param array $command_args Argumentos nomeados/associativos (include_ids, exclude_ids, chunk, dry_run).
      *
      * @return void
      */
     static function cmd_import_users( $args, $command_args ) {
         $defaults = [
-            'blog_id'     => null,
             'include_ids' => '',
             'exclude_ids' => '',
             'chunk'       => 500,
@@ -410,11 +415,7 @@ class Commands {
 
         $options = wp_parse_args( $command_args, $defaults );
 
-        $blog_id = null;
-
-        if ( ! empty( $options['blog_id'] ) ) {
-            $blog_id = (int) $options['blog_id'];
-        }
+        $blog_id = isset( $args[0] ) ? (int) $args[0] : 1;
 
         $include_ids = [];
 

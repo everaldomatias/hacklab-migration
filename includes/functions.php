@@ -405,7 +405,7 @@ function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_
  * @param array $args
  * @return array<int,mixed>|\WP_Error
  */
-function remote_get_posts( array $args = [] ) {
+function get_remote_posts( array $args = [] ) {
     $ext = get_external_wpdb();
 
     if ( ! $ext ) {
@@ -461,6 +461,7 @@ function remote_get_posts( array $args = [] ) {
 
     $numberposts = max( 1, min( 100000, (int) $a['numberposts'] ) );
     $offset = max( 0, (int) $a['offset'] );
+    $post_status = $a['post_status'] == 'any' ? ['publish', 'pending', 'draft', 'future', 'private'] : $a['post_status'];
 
     $allowed_orderby = ['ID', 'post_date', 'post_title'];
     $orderby = in_array( $a['orderby'], $allowed_orderby, true ) ? $a['orderby'] : 'post_date';
@@ -571,7 +572,7 @@ function remote_get_posts( array $args = [] ) {
     };
 
     $where_sql[] = $build_in( "{$table_posts_quoted}.post_type",   $a['post_type'],   $params );
-    $where_sql[] = $build_in( "{$table_posts_quoted}.post_status", $a['post_status'], $params );
+    $where_sql[] = $build_in( "{$table_posts_quoted}.post_status", $post_status, $params );
 
     if ( ! empty( $a['include'] ) ) {
         $ids = array_values( array_filter( array_map( 'intval', (array) $a['include'] ), static fn( $v ) => $v > 0 ) );

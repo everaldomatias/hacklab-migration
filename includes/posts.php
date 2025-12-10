@@ -43,7 +43,7 @@ function import_remote_posts( array $args = [] ): array {
         'rows'        => []
     ];
 
-    $rows = remote_get_posts( $fetch );
+    $rows = get_remote_posts( $fetch );
 
     if ( is_wp_error( $rows ) ) {
         $summary['errors'][] = $rows->get_error_message();
