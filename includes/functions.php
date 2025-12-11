@@ -109,7 +109,7 @@ function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, ar
         $params  = $slice;
 
         $sql = "
-            SELECT DISTINCT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug
+            SELECT DISTINCT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug, tt.parent
               FROM {$tables['term_taxonomy']} tt
               JOIN {$tables['term_relationships']} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
               JOIN {$tables['terms']} t ON t.term_id = tt.term_id
@@ -127,7 +127,7 @@ function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, ar
         if ( $prepared === null ) {
             $ids_str = implode( ',', array_map( 'intval', $slice ) );
             $sql_fallback = "
-                SELECT DISTINCT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug
+                SELECT DISTINCT tr.object_id AS post_id, tt.taxonomy, t.term_id, t.name, t.slug, tt.parent
                   FROM {$tables['term_taxonomy']} tt
                   JOIN {$tables['term_relationships']} tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
                   JOIN {$tables['terms']} t ON t.term_id = tt.term_id
@@ -197,12 +197,14 @@ function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, ar
             $tx  = (string) ( $r['taxonomy'] ?? '' );
             if ( $tx === '' ) { continue; }
             $rid = (int) ( $r['term_id'] ?? 0 );
+            $parent_id = (int) ( $r['parent'] ?? 0 );
 
             $out[ $pid ][ $tx ][] = [
-                'term_id' => $rid,
-                'name'    => (string) ( $r['name']    ?? '' ),
-                'slug'    => (string) ( $r['slug']    ?? '' ),
-                'meta'    => $meta_by_term[ $rid ] ?? [],
+                'term_id'    => $rid,
+                'name'       => (string) ( $r['name']    ?? '' ),
+                'slug'       => (string) ( $r['slug']    ?? '' ),
+                'parent_id'  => $parent_id,
+                'meta'       => $meta_by_term[ $rid ] ?? [],
             ];
         }
     }
@@ -235,6 +237,9 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
             $slug = (string) ( $t['slug'] ?? '' );
             $remote_term_id = (int) ( $t['term_id'] ?? 0 );
             $term_meta      = is_array( $t['meta'] ?? null ) ? $t['meta'] : [];
+            $remote_parent_id = (int) ( $t['parent_id'] ?? 0 );
+            $parent_slug = (string) ( $t['parent_slug'] ?? '' );
+            $parent_name = (string) ( $t['parent_name'] ?? '' );
 
             if ( $slug === '' && $name !== '' ) {
                 $slug = sanitize_title( $name );
@@ -261,6 +266,8 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
                 }
             }
 
+            do_action( 'logger', $local_term_id );
+
             if ( $local_term_id <= 0 ) {
                 $insert_args = [];
 
@@ -268,12 +275,17 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
                     $insert_args['slug'] = $slug;
                 }
 
-                if ( ! empty( $t['parent_slug'] ) || ! empty( $t['parent_name'] ) ) {
-                    $parent_slug = (string) ( $t['parent_slug'] ?? '' );
-                    $parent_name = (string) ( $t['parent_name'] ?? '' );
+                if ( $remote_parent_id > 0 || $parent_slug !== '' || $parent_name !== '' ) {
                     $parent_id   = 0;
 
-                    if ( $parent_slug !== '' ) {
+                    if ( $parent_slug === '' && $parent_name === '' && $remote_parent_id > 0 ) {
+                        $parent_existing = term_exists( (int) $remote_parent_id, $local_tax );
+                        if ( $parent_existing && ! is_wp_error( $parent_existing ) ) {
+                            $parent_id = is_array( $parent_existing ) ? (int) ( $parent_existing['term_id'] ?? 0 ) : (int) $parent_existing;
+                        }
+                    }
+
+                    if ( $parent_id <= 0 && $parent_slug !== '' ) {
                         $parent_exists = term_exists( $parent_slug, $local_tax );
                         if ( ! $parent_exists && $parent_name !== '' ) {
                             $parent_exists = term_exists( $parent_name, $local_tax );
