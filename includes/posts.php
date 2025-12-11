@@ -121,7 +121,7 @@ function import_remote_posts( array $args = [] ): array {
             $row['blog_id'] = $blog_id;
 
             try {
-                ( $options['fn_pre'] )( $postarr, $options );
+                ( $options['fn_pre'] )( $postarr, $options, $row );
             } catch ( \Throwable $e ) {
                 $summary['errors'][] = "fn_pre ({$row['ID']}): " . $e->getMessage();
             }
@@ -152,7 +152,10 @@ function import_remote_posts( array $args = [] ): array {
             $summary['imported']++;
         }
 
-        $row_terms = $row['remote_terms'] ?? [];
+        $remote_terms = $row['remote_terms'] ?? [];
+        $local_terms = $row['local_terms'] ?? [];
+
+        $row_terms = array_merge( $remote_terms, $local_terms );
 
         // Co Authors Plus
         if ( cap_instance() && ! empty ( $row_terms['author'] ) ) {
