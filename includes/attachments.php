@@ -459,14 +459,24 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
         'update_post_meta_cache' => false,
     ] );
 
-    if ( $existing ) {
-        $att_id = (int) $existing[0];
-    } else {
-        $mime  = (string) ($rpost['post_mime_type'] ?? wp_check_filetype( $file_abs )['type'] ?? 'application/octet-stream' );
-        $title = (string) ($rpost['post_title'] ?? pathinfo( $file_abs, PATHINFO_FILENAME ) );
-        $slug  = (string) ($rpost['post_name'] ?? sanitize_title( $title ) );
-        $guid  = trailingslashit($uploads['baseurl']) . $attached_file;
+    $att_id = $existing ? (int) $existing[0] : 0;
 
+    $mime  = (string) ( $rpost['post_mime_type'] ?? wp_check_filetype( $file_abs )['type'] ?? 'application/octet-stream' );
+    $title = (string) ( $rpost['post_title'] ?? pathinfo( $file_abs, PATHINFO_FILENAME ) );
+    $slug  = (string) ( $rpost['post_name'] ?? sanitize_title( $title ) );
+    $guid  = trailingslashit( $uploads['baseurl'] ) . $attached_file;
+    $att_date     = isset( $rpost['post_date'] ) ? (string) $rpost['post_date'] : '';
+    $att_date_gmt = isset( $rpost['post_date_gmt'] ) ? (string) $rpost['post_date_gmt'] : '';
+
+    if ( $att_id > 0 ) {
+        if ( $att_date !== '' || $att_date_gmt !== '' ) {
+            wp_update_post( [
+                'ID'            => $att_id,
+                'post_date'     => $att_date ?: null,
+                'post_date_gmt' => $att_date_gmt ?: null,
+            ] );
+        }
+    } else {
         $att_id = wp_insert_attachment( [
             'post_mime_type' => $mime,
             'post_title'     => $title,
@@ -474,6 +484,8 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
             'post_content'   => '',
             'post_status'    => 'inherit',
             'guid'           => esc_url_raw( $guid ),
+            'post_date'      => $att_date,
+            'post_date_gmt'  => $att_date_gmt,
         ], $file_abs );
 
         if ( is_wp_error( $att_id ) || ! $att_id ) return 0;
