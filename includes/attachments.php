@@ -304,7 +304,7 @@ function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = nul
         $ph  = implode( ',', array_fill( 0, count( $ids), '%d' ) );
 
         $sql = "
-            SELECT p.ID, p.post_title, p.post_name, p.post_mime_type, p.guid
+            SELECT p.ID, p.post_title, p.post_name, p.post_mime_type, p.guid, p.post_date, p.post_date_gmt
               FROM {$t_posts} p
              WHERE p.ID IN ({$ph}) AND p.post_type='attachment'
         ";
