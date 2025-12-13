@@ -108,6 +108,7 @@ class Commands {
                         break;
 
                     case 'numberposts':
+                    case 'limit':
                     case 'offset':
                         $fetch[ $key ] = max( 0, (int) $argument_value );
                         break;
@@ -130,6 +131,20 @@ class Commands {
                         } else {
                             $fetch['post_modified_gmt'] = (string) $argument_value;
                         }
+                        break;
+
+                    case 'modified_after':
+                    case 'modified_before':
+                        if ( is_numeric( $argument_value ) ) {
+                            $fetch[ $key ] = (int) $argument_value;
+                        } else {
+                            $fetch[ $key ] = (string) $argument_value;
+                        }
+                        break;
+
+                    case 'id_gte': // maior ou igual  ≥ )
+                    case 'id_lte': // menor ou igual ( ≤ )
+                        $fetch[ $key ] = (int) $argument_value;
                         break;
 
                     default:
@@ -172,6 +187,14 @@ class Commands {
                     if ( is_string( $argument_value ) && $argument_value !== '' ) {
                         $options['uploads_base'] = $argument_value;
                     }
+                    break;
+
+                case 'write_mode':
+                    if ( is_string( $argument_value ) && $argument_value !== '' ) {
+                        // Determina o modo de importação, insere novos posts, atualiza posts existentes ou insere e atualiza quando possível
+                        $options['write_mode'] = in_array( $argument_value, [ 'insert', 'update', 'upsert' ], true ) ? $argument_value : 'upsert';
+                    }
+
                     break;
 
                 default:
@@ -217,7 +240,10 @@ class Commands {
             \WP_CLI::error( sprintf( 'callback_pos não é callable: %s', $options['fn_pos'] ) );
         }
 
+        \WP_CLI::line();
         \WP_CLI::log( 'Iniciando run_import()...' );
+        \WP_CLI::line();
+
         $summary = run_import( $options );
 
         if ( is_wp_error( $summary ) ) {
@@ -226,12 +252,6 @@ class Commands {
 
         if ( ! is_array( $summary ) ) {
             \WP_CLI::error( 'run_import() retornou um resultado inválido.' );
-        }
-
-        if ( ! empty( $summary['errors'] ) && is_array( $summary['errors'] ) ) {
-            foreach ( $summary['errors'] as $err ) {
-                \WP_CLI::warning( (string) $err );
-            }
         }
 
         $posts       = $summary['posts'] ?? [];
@@ -250,7 +270,7 @@ class Commands {
             'registered'        => $attachments['registered'] ?? 0,
             'reused'            => $attachments['reused'] ?? 0,
             'thumbnails_set'    => $attachments['thumbnails_set'] ?? 0,
-            'missing_files'     => implode( ', ', $attachments['missing_files'] ?? [] ),
+            'missing_files'     => count( (array) $attachments['missing_files'] ) ?? 0
         ];
 
         $separator = str_repeat( '#', 59 );
@@ -266,20 +286,49 @@ class Commands {
         \WP_CLI::line( $separator );
         \WP_CLI::line();
         \WP_CLI::line( $separator );
-        \WP_CLI::line( 'Attachments:' );
+        \WP_CLI::line( 'ANEXOS:' );
 
         foreach ( $attachments_data as $label => $value ) {
             \WP_CLI::log( sprintf( '%s: %s', $label, $value ) );
         }
 
-        \WP_CLI::line( $separator );
-        \WP_CLI::line();
+        if ( ! empty( $attachments['missing_files'] ) ) {
+            \WP_CLI::line( $separator );
+            \WP_CLI::line();
+            \WP_CLI::line( $separator );
+            \WP_CLI::line( 'ANEXOS NÃO ENCONTRADOS:' );
 
-        if ( ! empty( $summary['map'] ) && is_array( $summary['map'] ) ) {
-            \WP_CLI::log( 'Map (remote_id => local_id):' );
-            foreach ( $summary['map'] as $rid => $lid ) {
-                \WP_CLI::log( sprintf( '  %d => %d', (int) $rid, (int) $lid ) );
+            foreach ( (array) $attachments['missing_files'] as $rid => $file ) {
+                $rid_label = is_int( $rid ) ? "remote {$rid}" : $rid;
+                \WP_CLI::warning( sprintf( '  %s => %s', $rid_label, $file ) );
             }
+            \WP_CLI::line( $separator );
+        }
+
+        if ( ! empty( $posts['map'] ) && is_array( $posts['map'] ) ) {
+            \WP_CLI::line();
+            \WP_CLI::line( $separator );
+
+            \WP_CLI::line( 'Local posts (ID => post_modified_gmt):' );
+            foreach ( $posts['map'] as $rid => $lid ) {
+                $lid = (int) $lid;
+                if ( $lid <= 0 ) {
+                    continue;
+                }
+                $modified = get_post_field( 'post_modified_gmt', $lid );
+                \WP_CLI::log( sprintf( '  %d => %s', $lid, (string) $modified ) );
+            }
+            \WP_CLI::line( $separator );
+        }
+
+        if ( ! empty( $summary['errors'] ) ) {
+            \WP_CLI::line( 'Errors:' );
+            foreach ( (array) $summary['errors'] as $err ) {
+                \WP_CLI::warning( (string) $err );
+            }
+            \WP_CLI::line( $separator );
+        } else {
+            \WP_CLI::line();
         }
 
         if ( ! empty( $options['dry_run'] ) ) {

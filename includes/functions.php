@@ -21,16 +21,18 @@ function run_import( array $args = [] ) : array {
         'fn_pre'            => null,
         'uploads_base'      => '',
         'with_media'        => true,
+        'write_mode'        => 'upsert'
     ];
 
     $options = wp_parse_args( $args, $defaults );
 
     $posts_summary = import_remote_posts( [
-        'fetch'   => $options['fetch'],
-        'media'   => $options['with_media'],
-        'dry_run' => $options['dry_run'],
-        'fn_pre'  => $options['fn_pre'],
-        'fn_pos'  => $options['fn_pos']
+        'fetch'      => $options['fetch'],
+        'media'      => $options['with_media'],
+        'dry_run'    => $options['dry_run'],
+        'fn_pre'     => $options['fn_pre'],
+        'fn_pos'     => $options['fn_pos'],
+        'write_mode' => $options['write_mode']
     ] );
 
     $rows = $posts_summary['rows'] ?? [];
@@ -266,8 +268,6 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
                 }
             }
 
-            do_action( 'logger', $local_term_id );
-
             if ( $local_term_id <= 0 ) {
                 $insert_args = [];
 
@@ -317,7 +317,7 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
             $term_cache[ $local_tax ][ $slug ] = $local_term_id;
             $to_set[] = $local_term_id;
 
-            $meta_sync_key = $local_term_id . '|' . ( $blog_id ?? 0 );
+            $meta_sync_key = $local_term_id . '|' . ( $blog_id ?? 1 );
             if ( ! isset( $meta_synced[ $meta_sync_key ] ) ) {
                 if ( $term_meta ) {
                     foreach ( $term_meta as $m ) {
@@ -494,6 +494,7 @@ function get_remote_posts( array $args = [] ) {
         'post_type'         => 'post',
         'post_status'       => 'publish',
         'numberposts'       => 10,
+        'limit'             => null,
         'offset'            => 0,
         'orderby'           => 'post_date',
         'order'             => 'DESC',
@@ -503,6 +504,10 @@ function get_remote_posts( array $args = [] ) {
         'fields'            => 'all',
         'blog_id'           => null,
         'post_modified_gmt' => null,
+        'modified_after'    => null,
+        'modified_before'   => null,
+        'id_gte'            => null,
+        'id_lte'            => null,
         'tax_query'         => []
     ];
 
@@ -526,12 +531,28 @@ function get_remote_posts( array $args = [] ) {
         }
     }
 
-    $numberposts = max( 1, min( 100000, (int) $a['numberposts'] ) );
-    $offset = max( 0, (int) $a['offset'] );
+    $to_gmt = static function ( $value ): ?string {
+        if ( $value === null || $value === '' ) {
+            return null;
+        }
+        if ( is_int( $value ) || ctype_digit( (string) $value ) ) {
+            return gmdate( 'Y-m-d H:i:s', (int) $value );
+        }
+        $ts = strtotime( (string) $value );
+        return $ts ? gmdate( 'Y-m-d H:i:s', $ts ) : null;
+    };
+
+    $modified_after  = $to_gmt( $a['modified_after'] );
+    $modified_before = $to_gmt( $a['modified_before'] );
+
+    $limit_raw = $a['limit'] ?? $a['numberposts'];
+    $limit = ( $limit_raw === null || $limit_raw === '' ) ? null : max( 0, (int) $limit_raw );
+    $offset = ( $limit !== null && isset( $args['offset'] ) ) ? max( 0, (int) $a['offset'] ) : 0;
     $post_status = $a['post_status'] == 'any' ? ['publish', 'pending', 'draft', 'future', 'private'] : $a['post_status'];
 
-    $allowed_orderby = ['ID', 'post_date', 'post_title'];
-    $orderby = in_array( $a['orderby'], $allowed_orderby, true ) ? $a['orderby'] : 'post_date';
+    $allowed_orderby = ['ID', 'post_date', 'post_title', 'post_modified', 'post_modified_gmt'];
+    $orderby_default = ( $modified_after || $modified_before || ! empty( $a['post_modified_gmt'] ) ) ? 'post_modified_gmt' : 'post_date';
+    $orderby = in_array( $a['orderby'], $allowed_orderby, true ) ? $a['orderby'] : $orderby_default;
     $order   = strtoupper( (string) $a['order'] ) === 'ASC' ? 'ASC' : 'DESC';
 
     $fields = ( $a['fields'] === 'ids' ) ? 'ids' : 'all';
@@ -670,13 +691,29 @@ function get_remote_posts( array $args = [] ) {
     }
 
     if ( ! empty( $a['post_modified_gmt'] ) ) {
-        if ( is_int( $a['post_modified_gmt'] ) ) {
-            $after = gmdate( 'Y-m-d H:i:s', (int) $a['post_modified_gmt'] );
-        } else {
-            $after = (string) $a['post_modified_gmt'];
-        }
+        $after = is_int( $a['post_modified_gmt'] ) ? gmdate( 'Y-m-d H:i:s', (int) $a['post_modified_gmt'] ) : (string) $a['post_modified_gmt'];
         $where_sql[] = "{$table_posts_quoted}.post_modified_gmt >= %s";
         $params[]    = $after;
+    }
+
+    if ( $modified_after ) {
+        $where_sql[] = "{$table_posts_quoted}.post_modified_gmt >= %s";
+        $params[]    = $modified_after;
+    }
+
+    if ( $modified_before ) {
+        $where_sql[] = "{$table_posts_quoted}.post_modified_gmt < %s";
+        $params[]    = $modified_before;
+    }
+
+    if ( ! empty( $a['id_gte'] ) ) {
+        $where_sql[] = "{$table_posts_quoted}.ID >= %d";
+        $params[]    = (int) $a['id_gte'];
+    }
+
+    if ( ! empty( $a['id_lte'] ) ) {
+        $where_sql[] = "{$table_posts_quoted}.ID <= %d";
+        $params[]    = (int) $a['id_lte'];
     }
 
     $where = $where_sql ? ( 'WHERE ' . implode( ' AND ', $where_sql ) ) : '';
@@ -686,16 +723,22 @@ function get_remote_posts( array $args = [] ) {
         : '*';
 
     $sql = "
-        SELECT DISTINCT {$select_cols}
+        SELECT {$select_cols}
             FROM {$table_posts_quoted}
             {$join_tax}
             {$where}
         ORDER BY {$table_posts_quoted}.{$orderby} {$order}
-            LIMIT %d OFFSET %d
     ";
 
-    $params[] = $numberposts;
-    $params[] = $offset;
+    if ( $limit !== null && $limit > 0 ) {
+        $sql     .= " LIMIT %d";
+        $params[] = $limit;
+
+        if ( isset( $args['offset'] ) && $offset > 0 ) {
+            $sql     .= " OFFSET %d";
+            $params[] = $offset;
+        }
+    }
 
     $prepared = $ext->prepare( $sql, ...$params );
 
