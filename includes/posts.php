@@ -177,6 +177,25 @@ function import_remote_posts( array $args = [] ): array {
         }
 
         $summary['map'][$remote_id] = $local_id;
+
+        // Preserva post_modified e post_modified_gmt do remoto.
+        $remote_modified     = (string) ( $row['post_modified']     ?? '' );
+        $remote_modified_gmt = (string) ( $row['post_modified_gmt'] ?? '' );
+
+        if ( $remote_modified !== '' || $remote_modified_gmt !== '' ) {
+            global $wpdb;
+            $wpdb->update(
+                $wpdb->posts,
+                [
+                    'post_modified'     => $remote_modified     ?: null,
+                    'post_modified_gmt' => $remote_modified_gmt ?: null,
+                ],
+                [ 'ID' => $local_id ],
+                ['%s','%s'],
+                ['%d']
+            );
+            clean_post_cache( $local_id );
+        }
     }
 
     return $summary;
