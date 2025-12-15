@@ -246,6 +246,10 @@ class Commands {
 
         $summary = run_import( $options );
 
+        \WP_CLI::line();
+        \WP_CLI::log( 'Posts encontrados, iniciando importação no WP local...' );
+        \WP_CLI::line();
+
         if ( is_wp_error( $summary ) ) {
             \WP_CLI::error( $summary->get_error_message() );
         }
@@ -335,6 +339,146 @@ class Commands {
             \WP_CLI::success( 'Dry-run concluído.' );
         } else {
             \WP_CLI::success( 'Importação concluída.' );
+        }
+    }
+
+    /**
+     * Lista posts no remoto aplicando os mesmos filtros do run-import, sem gravar no WP local.
+     *
+     * Exemplos:
+     *   wp list-remote-posts --q:post_type=post --q:numberposts=100 --q:order=ASC --q:orderby=ID
+     *   wp list-remote-posts --q:post_type=post --q:modified_after="2024-01-01 00:00:00" --q:numberposts=50
+     *
+     * @param array $args
+     * @param array $assoc_args
+     */
+    static function cmd_list_remote_posts( $args, $assoc_args ) {
+        $fetch   = [];
+
+        foreach ( $assoc_args as $argument_name => $argument_value ) {
+            $argument_value = is_string( $argument_value )
+                ? str_replace( '+', ' ', $argument_value )
+                : $argument_value;
+
+            if ( strpos( $argument_name, 'q:' ) === 0 ) {
+                $key = substr( $argument_name, 2 ); // remove "q:"
+
+                switch ( $key ) {
+                    case 'tax_query':
+                        // --q:tax_query=category:apto
+                        // --q:tax_query=category:apto,terreo
+                        // --q:tax_query="category:apto;post_tag:futebol"
+                        $raw = (string) $argument_value;
+                        $raw = trim( $raw );
+                        if ( $raw === '' ) {
+                            break;
+                        }
+
+                        $parts = array_filter(
+                            array_map( 'trim', explode( ';', $raw ) )
+                        );
+
+                        $tax_query_clauses  = [];
+                        $tax_query_relation = 'AND';
+
+                        foreach ( $parts as $tax_query_part ) {
+                            [ $taxonomy, $terms_str ] = array_pad(
+                                explode( ':', $tax_query_part, 2 ),
+                                2,
+                                ''
+                            );
+
+                            $taxonomy = trim( $taxonomy );
+                            $terms    = array_filter(
+                                array_map( 'trim', explode( ',', (string) $terms_str ) )
+                            );
+
+                            if ( $taxonomy === '' || ! $terms ) {
+                                continue;
+                            }
+
+                            $tax_query_clauses[] = [
+                                'taxonomy' => $taxonomy,
+                                'field'    => 'slug',
+                                'terms'    => $terms,
+                            ];
+                        }
+
+                        if ( $tax_query_clauses ) {
+                            if ( count( $tax_query_clauses ) === 1 ) {
+                                $fetch['tax_query'][] = $tax_query_clauses[0];
+                            } else {
+                                $fetch['tax_query'][] = array_merge(
+                                    [ 'relation' => $tax_query_relation ],
+                                    $tax_query_clauses
+                                );
+                            }
+                        }
+                        break;
+
+                    case 'post_type':
+                    case 'post_status':
+                        $fetch[ $key ] = self::csv_or_scalar( $argument_value );
+                        break;
+
+                    case 'numberposts':
+                    case 'limit':
+                        $fetch[ $key ] = max( 0, (int) $argument_value );
+                        break;
+
+                    case 'offset':
+                        $fetch[ $key ] = max( 0, (int) $argument_value );
+                        break;
+
+                    case 'orderby':
+                    case 'order':
+                    case 'search':
+                    case 'modified_after':
+                    case 'modified_before':
+                    case 'post_modified_gmt':
+                        $fetch[ $key ] = (string) $argument_value;
+                        break;
+
+                    case 'include':
+                    case 'exclude':
+                        $fetch[ $key ] = self::csv_ints( $argument_value );
+                        break;
+
+                    case 'id_gte':
+                    case 'id_lte':
+                        $fetch[ $key ] = (int) $argument_value;
+                        break;
+
+                    case 'blog_id':
+                        $fetch['blog_id'] = (int) $argument_value;
+                        break;
+
+                    default:
+                        $fetch[ $key ] = $argument_value;
+                        break;
+                }
+            }
+        }
+
+        if ( empty( $fetch['post_status'] ) ) {
+            $fetch['post_status'] = ['publish', 'pending', 'draft', 'future', 'private'];
+        }
+
+        $rows = get_remote_posts( $fetch );
+        if ( is_wp_error( $rows ) ) {
+            \WP_CLI::error( $rows->get_error_message() );
+        }
+
+        if ( ! $rows ) {
+            \WP_CLI::success( 'Nenhum post encontrado.' );
+            return;
+        }
+
+        foreach ( $rows as $row ) {
+            $rid       = (int) ( $row['ID'] ?? 0 );
+            $title     = (string) ( $row['post_title'] ?? '' );
+            $modified  = (string) ( $row['post_modified_gmt'] ?? '' );
+            \WP_CLI::line( sprintf( '%d | %s | %s', $rid, $title, $modified ) );
         }
     }
 
