@@ -44,6 +44,15 @@ function add_admin_menu() {
         'hacklab-migration-remote-meta',
         __NAMESPACE__ . '\\render_remote_meta_page'
     );
+
+    add_submenu_page(
+        'hacklab-migration',
+        __( 'Buscar por ID remoto', 'hacklabr' ),
+        __( 'Buscar por ID remoto', 'hacklabr' ),
+        HACKLAB_MIGRATION_CAP,
+        'hacklab-migration-find-local',
+        __NAMESPACE__ . '\\render_local_lookup_page'
+    );
 }
 
 /**
@@ -443,4 +452,158 @@ function export_remote_meta_csv() {
         fclose( $out );
     }
     exit;
+}
+
+/**
+ * Busca posts locais a partir do ID remoto (_hacklab_migration_source_id).
+ */
+function render_local_lookup_page() {
+    if ( ! current_user_can( HACKLAB_MIGRATION_CAP ) ) {
+        wp_die( esc_html__( 'Sem permissão.', 'hacklabr' ) );
+    }
+
+    $notice_key = 'hm_local_lookup';
+    $remote_id  = '';
+    $blog_id    = 1;
+    $results    = [];
+
+    if ( isset( $_POST['hm_lookup_submit'] ) ) {
+        check_admin_referer( HACKLAB_MIGRATION_NONCE_ACTION );
+
+        $remote_id = isset( $_POST['hm_remote_id'] ) ? (int) $_POST['hm_remote_id'] : 0;
+        $blog_id   = isset( $_POST['hm_remote_blog_id'] ) ? (int) $_POST['hm_remote_blog_id'] : 1;
+
+        if ( $remote_id <= 0 ) {
+            add_settings_error(
+                $notice_key,
+                'missing_remote_id',
+                __( 'Informe um ID remoto válido.', 'hacklabr' ),
+                'error'
+            );
+        } else {
+            $results = get_posts( [
+                'post_type'              => 'any',
+                'post_status'            => 'any',
+                'posts_per_page'         => 50,
+                'fields'                 => 'all',
+                'no_found_rows'          => true,
+                'update_post_meta_cache' => true,
+                'update_post_term_cache' => false,
+                'meta_query'             => [
+                    [
+                        'key'     => '_hacklab_migration_source_id',
+                        'value'   => $remote_id,
+                        'compare' => '=',
+                        'type'    => 'NUMERIC',
+                    ],
+                    [
+                        'key'     => '_hacklab_migration_source_blog',
+                        'value'   => $blog_id,
+                        'compare' => '=',
+                        'type'    => 'NUMERIC',
+                    ],
+                ],
+            ] );
+
+            if ( ! $results ) {
+                add_settings_error(
+                    $notice_key,
+                    'not_found',
+                    __( 'Nenhum post local encontrado para os parâmetros informados.', 'hacklabr' ),
+                    'info'
+                );
+            } else {
+                add_settings_error(
+                    $notice_key,
+                    'found',
+                    sprintf(
+                        __( '%d registro(s) encontrado(s).', 'hacklabr' ),
+                        count( $results )
+                    ),
+                    'updated'
+                );
+            }
+        }
+    }
+    ?>
+    <div class="wrap">
+        <h1><?php echo esc_html__( 'Buscar posts por ID remoto', 'hacklabr' ); ?></h1>
+
+        <?php settings_errors( $notice_key ); ?>
+
+        <form method="post" action="">
+            <?php wp_nonce_field( HACKLAB_MIGRATION_NONCE_ACTION ); ?>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row">
+                        <label for="hm_remote_id"><?php esc_html_e( 'ID remoto', 'hacklabr' ); ?></label>
+                    </th>
+                    <td>
+                        <input
+                            name="hm_remote_id"
+                            id="hm_remote_id"
+                            type="number"
+                            class="regular-text"
+                            min="1"
+                            required
+                            value="<?php echo esc_attr( $remote_id ); ?>"
+                        >
+                        <p class="description"><?php esc_html_e( 'Valor salvo em _hacklab_migration_source_id.', 'hacklabr' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="hm_remote_blog_id"><?php esc_html_e( 'Blog ID remoto', 'hacklabr' ); ?></label>
+                    </th>
+                    <td>
+                        <input
+                            name="hm_remote_blog_id"
+                            id="hm_remote_blog_id"
+                            type="number"
+                            class="small-text"
+                            min="1"
+                            value="<?php echo (int) $blog_id; ?>"
+                        >
+                        <p class="description"><?php esc_html_e( 'Use o ID de origem (wp_1_, wp_2_...). Default: 1.', 'hacklabr' ); ?></p>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button( __( 'Buscar', 'hacklabr' ), 'primary', 'hm_lookup_submit' ); ?>
+        </form>
+
+        <?php if ( $results ) : ?>
+            <hr>
+            <h2><?php esc_html_e( 'Resultados', 'hacklabr' ); ?></h2>
+            <table class="widefat striped">
+                <thead>
+                    <tr>
+                        <th><?php esc_html_e( 'Local ID', 'hacklabr' ); ?></th>
+                        <th><?php esc_html_e( 'Título', 'hacklabr' ); ?></th>
+                        <th><?php esc_html_e( 'Post type', 'hacklabr' ); ?></th>
+                        <th><?php esc_html_e( 'Status', 'hacklabr' ); ?></th>
+                        <th><?php esc_html_e( 'Modificado (GMT)', 'hacklabr' ); ?></th>
+                        <th><?php esc_html_e( 'Permalink', 'hacklabr' ); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $results as $p ) : ?>
+                        <tr>
+                            <td><?php echo (int) $p->ID; ?></td>
+                            <td><?php echo esc_html( get_the_title( $p ) ); ?></td>
+                            <td><?php echo esc_html( get_post_type( $p ) ); ?></td>
+                            <td><?php echo esc_html( get_post_status( $p ) ); ?></td>
+                            <td><?php echo esc_html( (string) get_post_field( 'post_modified_gmt', $p ) ); ?></td>
+                            <td>
+                                <?php $link = get_permalink( $p ); ?>
+                                <?php if ( $link ) : ?>
+                                    <a href="<?php echo esc_url( $link ); ?>" target="_blank" rel="noreferrer noopener"><?php esc_html_e( 'Ver', 'hacklabr' ); ?></a>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    </div>
+    <?php
 }
