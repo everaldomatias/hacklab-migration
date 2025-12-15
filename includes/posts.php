@@ -78,16 +78,24 @@ function import_remote_posts( array $args = [] ): array {
         $existing = find_local_post( $remote_id, $blog_id );
         $is_update = $existing > 0;
 
+        $post_status = in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'publish';
+        $post_author = $row['post_author'] ? find_local_user( $row['post_author'], $blog_id ) : 0;
+        $post_name   = (string) ( $row['post_name'] ?? '' );
+
+        if ( $post_name === '' ) {
+            $post_name = sanitize_title( (string) $row['post_title'] ?: $remote_id );
+        }
+
         $postarr = [
             'post_title'    => $row['post_title'] ? (string) $row['post_title'] : 'Sem título',
             'post_content'  => (string) ( $row['post_content'] ? apply_text_filters( $row['post_content'], $row, $options ) : '' ),
             'post_excerpt'  => (string) ( $row['post_excerpt'] ? apply_text_filters( $row['post_excerpt'], $row, $options ) : '' ),
-            'post_status'   => in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'draft',
+            'post_status'   => $post_status,
             'post_type'     => $remote_type,
             'post_date'     => (string) $row['post_date'],
             'post_date_gmt' => (string) ( $row['post_date_gmt'] ?? '' ),
-            'post_author'   => (string) ( $row['post_author'] ? find_local_user( $row['post_author'], $blog_id ) : '' ),
-            'post_name'     => (string) ( $row['post_name'] ?? sanitize_title( (string) $row['post_title'] ) )
+            'post_author'   => (int) $post_author,
+            'post_name'     => $post_name
         ];
 
         $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
