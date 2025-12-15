@@ -3,7 +3,7 @@
  * Plugin Name:       #Hacklab Migration
  * Plugin URI:        https://github.com/hacklabr
  * Description:       Plugin to migrate content WordPress.
- * Version:           0.0.11
+ * Version:           0.0.12
  * Requires at least: 5.2
  * Requires PHP:      7.4
  * Author:            Hacklab Team
