@@ -51,6 +51,46 @@ class Commands {
                 ? str_replace( '+', ' ', $argument_value )
                 : $argument_value;
 
+            if ( strpos( $argument_name, 'meta:' ) === 0 ) {
+                $meta_key = sanitize_key( substr( $argument_name, 5 ) );
+                if ( $meta_key !== '' ) {
+                    $options['meta_ops'][ $meta_key ] = $argument_value;
+                }
+                continue;
+            }
+
+            if ( strpos( $argument_name, 'add:' ) === 0 ) {
+                $tax = sanitize_key( substr( $argument_name, 4 ) );
+                if ( $tax !== '' ) {
+                    $options['term_add'][ $tax ] = self::csv_or_scalar( $argument_value );
+                }
+                continue;
+            }
+
+            if ( strpos( $argument_name, 'set:' ) === 0 ) {
+                $tax = sanitize_key( substr( $argument_name, 4 ) );
+                if ( $tax !== '' ) {
+                    $options['term_set'][ $tax ] = self::csv_or_scalar( $argument_value );
+                }
+                continue;
+            }
+
+            if ( strpos( $argument_name, 'rm:' ) === 0 ) {
+                $tax = sanitize_key( substr( $argument_name, 3 ) );
+                if ( $tax !== '' ) {
+                    $options['term_rm'][ $tax ] = self::csv_or_scalar( $argument_value );
+                }
+                continue;
+            }
+
+            if ( strpos( $argument_name, 'post_type:' ) === 0 ) {
+                $pt = sanitize_key( substr( $argument_name, 10 ) );
+                if ( $pt !== '' ) {
+                    $options['target_post_type'] = $pt;
+                }
+                continue;
+            }
+
             if ( strpos( $argument_name, 'q:' ) === 0 ) {
                 $key = substr( $argument_name, 2 ); // remove "q:"
 
@@ -225,6 +265,11 @@ class Commands {
         if ( ! array_key_exists( 'with_media', $options ) ) {
             $options['with_media'] = true;
         }
+
+        $options['meta_ops'] = $options['meta_ops'] ?? [];
+        $options['term_add'] = $options['term_add'] ?? [];
+        $options['term_set'] = $options['term_set'] ?? [];
+        $options['term_rm']  = $options['term_rm']  ?? [];
 
         if ( ! array_key_exists( 'dry_run', $options ) ) {
             $options['dry_run'] = false;

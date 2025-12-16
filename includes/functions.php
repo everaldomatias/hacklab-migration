@@ -19,13 +19,18 @@ function run_import( array $args = [] ) : array {
         'fetch'             => ['numberposts' => 10],
         'fn_pos'            => null,
         'fn_pre'            => null,
+        'meta_ops'          => [],
+        'term_add'          => [],
+        'term_set'          => [],
+        'term_rm'           => [],
+        'target_post_type'  => '',
         'with_media'        => true,
         'write_mode'        => 'upsert'
     ];
 
     $options = wp_parse_args( $args, $defaults );
 
-    if ( $options['uploads_base'] === '' ) {
+    if ( empty( $options['uploads_base'] ) ) {
         $creds = get_credentials();
         if ( ! empty( $creds['uploads_base'] ) ) {
             $options['uploads_base'] = (string) $creds['uploads_base'];
@@ -33,13 +38,18 @@ function run_import( array $args = [] ) : array {
     }
 
     $posts_summary = import_remote_posts( [
-        'fetch'        => $options['fetch'],
-        'media'        => $options['with_media'],
-        'dry_run'      => $options['dry_run'],
-        'fn_pre'       => $options['fn_pre'],
-        'fn_pos'       => $options['fn_pos'],
-        'uploads_base' => (string) $options['uploads_base'],
-        'write_mode'   => $options['write_mode']
+        'fetch'            => $options['fetch'],
+        'media'            => $options['with_media'],
+        'dry_run'          => $options['dry_run'],
+        'fn_pre'           => $options['fn_pre'],
+        'fn_pos'           => $options['fn_pos'],
+        'meta_ops'         => (array) $options['meta_ops'],
+        'term_add'         => (array) $options['term_add'],
+        'term_set'         => (array) $options['term_set'],
+        'term_rm'          => (array) $options['term_rm'],
+        'target_post_type' => (string) $options['target_post_type'],
+        'uploads_base'     => (string) $options['uploads_base'],
+        'write_mode'       => $options['write_mode']
     ] );
 
     $rows = $posts_summary['rows'] ?? [];

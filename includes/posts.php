@@ -21,6 +21,11 @@ function import_remote_posts( array $args = [] ): array {
         'dry_run'      => false,
         'fn_pre'       => null,
         'fn_pos'       => null,
+        'meta_ops'     => [],
+        'term_add'     => [],
+        'term_set'     => [],
+        'term_rm'      => [],
+        'target_post_type' => '',
         'uploads_base' => '',
         'write_mode'   => 'upsert'
     ];
@@ -79,7 +84,9 @@ function import_remote_posts( array $args = [] ): array {
 
     foreach ( $rows as $row ) {
         $remote_id     = (int) $row['ID'];
-        $remote_type   = post_type_exists( $row['post_type'] ) ? (string) $row['post_type'] : 'post';
+        $remote_type   = post_type_exists( $row['post_type'] ) ? (string) $row['post_type'] : '';
+        $target_type   = sanitize_key( (string) ( $options['target_post_type'] ?? '' ) );
+        $post_type     = $target_type !== '' ? $target_type : $remote_type;
         $remote_status = (string) $row['post_status'];
 
         // Verifica se já foi importado
@@ -99,7 +106,7 @@ function import_remote_posts( array $args = [] ): array {
             'post_content'  => (string) ( $row['post_content'] ? apply_text_filters( $row['post_content'], $row, $options ) : '' ),
             'post_excerpt'  => (string) ( $row['post_excerpt'] ? apply_text_filters( $row['post_excerpt'], $row, $options ) : '' ),
             'post_status'   => $post_status,
-            'post_type'     => $remote_type,
+            'post_type'     => $post_type,
             'post_date'     => (string) $row['post_date'],
             'post_date_gmt' => (string) ( $row['post_date_gmt'] ?? '' ),
             'post_author'   => (int) $post_author,
@@ -116,7 +123,7 @@ function import_remote_posts( array $args = [] ): array {
         }
 
         $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
-        $postarr['meta_input']['_hacklab_migration_source_meta']['post_type'] = $remote_type;
+        $postarr['meta_input']['_hacklab_migration_source_post_type'] = $remote_type;
         $postarr['meta_input']['_hacklab_migration_last_updated'] = time();
 
         if ( ! empty( $post_meta['_edit_last'] ) ) {
@@ -204,6 +211,96 @@ function import_remote_posts( array $args = [] ): array {
         }
 
         ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms, [], $blog_id );
+
+        if ( ! $options['dry_run'] && ( ! empty( $options['term_set'] ) || ! empty( $options['term_add'] ) || ! empty( $options['term_rm'] ) ) ) {
+            $prepare_terms = static function ( $value ): array {
+                $arr = is_array( $value ) ? $value : explode( ',', (string) $value );
+                $arr = array_map( 'trim', $arr );
+                $arr = array_filter( $arr, static fn( $v ) => $v !== '' );
+                return array_values( array_unique( $arr ) );
+            };
+
+            $resolve_term_id = static function ( string $tax, string $term ) {
+                $exists = term_exists( $term, $tax );
+                if ( $exists && ! is_wp_error( $exists ) ) {
+                    return is_array( $exists ) ? (int) ( $exists['term_id'] ?? 0 ) : (int) $exists;
+                }
+                return 0;
+            };
+
+            foreach ( (array) $options['term_set'] as $tax => $terms ) {
+                $tax = sanitize_key( $tax );
+                if ( $tax === '' || ! taxonomy_exists( $tax ) ) continue;
+                $list = $prepare_terms( $terms );
+                if ( ! $list ) continue;
+                $term_ids = [];
+                foreach ( $list as $term ) {
+                    $tid = $resolve_term_id( $tax, $term );
+                    if ( $tid <= 0 ) {
+                        $insert = wp_insert_term( $term, $tax, [ 'slug' => sanitize_title( $term ) ] );
+                        if ( ! is_wp_error( $insert ) ) {
+                            $tid = (int) ( $insert['term_id'] ?? 0 );
+                        }
+                    }
+                    if ( $tid > 0 ) {
+                        $term_ids[] = $tid;
+                    }
+                }
+                if ( $term_ids ) {
+                    wp_set_object_terms( $local_id, array_values( array_unique( $term_ids ) ), $tax, false );
+                }
+            }
+
+            foreach ( (array) $options['term_add'] as $tax => $terms ) {
+                $tax = sanitize_key( $tax );
+                if ( $tax === '' || ! taxonomy_exists( $tax ) ) continue;
+                $list = $prepare_terms( $terms );
+                if ( ! $list ) continue;
+                $term_ids = [];
+                foreach ( $list as $term ) {
+                    $tid = $resolve_term_id( $tax, $term );
+                    if ( $tid <= 0 ) {
+                        $insert = wp_insert_term( $term, $tax, [ 'slug' => sanitize_title( $term ) ] );
+                        if ( ! is_wp_error( $insert ) ) {
+                            $tid = (int) ( $insert['term_id'] ?? 0 );
+                        }
+                    }
+                    if ( $tid > 0 ) {
+                        $term_ids[] = $tid;
+                    }
+                }
+                if ( $term_ids ) {
+                    wp_set_object_terms( $local_id, array_values( array_unique( $term_ids ) ), $tax, true );
+                }
+            }
+
+            foreach ( (array) $options['term_rm'] as $tax => $terms ) {
+                $tax = sanitize_key( $tax );
+                if ( $tax === '' || ! taxonomy_exists( $tax ) ) continue;
+                $list = $prepare_terms( $terms );
+                if ( ! $list ) continue;
+                $remove_ids = [];
+                foreach ( $list as $term ) {
+                    $tid = $resolve_term_id( $tax, $term );
+                    if ( $tid > 0 ) {
+                        $remove_ids[] = $tid;
+                    }
+                }
+                if ( $remove_ids ) {
+                    wp_remove_object_terms( $local_id, array_values( array_unique( $remove_ids ) ), $tax );
+                }
+            }
+        }
+
+        if ( ! empty( $options['meta_ops'] ) && ! $options['dry_run'] ) {
+            foreach ( $options['meta_ops'] as $mkey => $mvalue ) {
+                $mkey = sanitize_key( (string) $mkey );
+                if ( $mkey === '' ) {
+                    continue;
+                }
+                update_post_meta( $local_id, $mkey, $mvalue );
+            }
+        }
 
         // Com o parâmetro 'fn_pos' é possível alterar os dados do post depois de ser criado no WP local.
         if ( ! empty( $options['fn_pos'] ) && is_callable( $options['fn_pos'] ) ) {
