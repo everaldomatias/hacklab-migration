@@ -213,9 +213,9 @@ class Commands {
 
         if ( $tax_query_clauses ) {
             if ( count( $tax_query_clauses ) === 1 ) {
-                $fetch['tax_query'][] = $tax_query_clauses[0];
+                $fetch['tax_query'] = $tax_query_clauses[0];
             } else {
-                $fetch['tax_query'][] = array_merge(
+                $fetch['tax_query'] = array_merge(
                     [ 'relation' => $tax_query_relation ],
                     $tax_query_clauses
                 );
@@ -406,9 +406,9 @@ class Commands {
 
                         if ( $tax_query_clauses ) {
                             if ( count( $tax_query_clauses ) === 1 ) {
-                                $fetch['tax_query'][] = $tax_query_clauses[0];
+                                $fetch['tax_query'] = $tax_query_clauses[0];
                             } else {
-                                $fetch['tax_query'][] = array_merge(
+                                $fetch['tax_query'] = array_merge(
                                     [ 'relation' => $tax_query_relation ],
                                     $tax_query_clauses
                                 );
@@ -473,6 +473,8 @@ class Commands {
             \WP_CLI::success( 'Nenhum post encontrado.' );
             return;
         }
+
+        \WP_CLI::log( sprintf( 'POSTS ENCONTRADOS: %d', count( $rows ) ) );
 
         foreach ( $rows as $row ) {
             $rid       = (int) ( $row['ID'] ?? 0 );
