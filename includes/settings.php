@@ -89,6 +89,8 @@ function render_settings_page() {
         // Configuração do campo É multisite?
         $is_multisite = isset( $in['is_multisite'] ) && (int) $in['is_multisite'] === 1 ? 1 : 0;
 
+        $uploads_base = isset( $in['uploads_base'] ) ? esc_url_raw( trim( (string) $in['uploads_base'] ) ) : '';
+
         $new = [
             'host'         => $host ? $host : $current['host'],
             'dbname'       => isset( $in['dbname'] ) ? sanitize_text_field( $in['dbname'] ) : $current['dbname'],
@@ -97,7 +99,8 @@ function render_settings_page() {
             'charset'      => isset( $in['charset'] ) ? sanitize_text_field( $in['charset'] ) : $current['charset'],
             'collate'      => isset( $in['collate'] ) ? sanitize_text_field( $in['collate'] ) : $current['collate'],
             'prefix'       => $prefix ?: ( $current['prefix'] ?? '' ),
-            'is_multisite' => $is_multisite
+            'is_multisite' => $is_multisite,
+            'uploads_base' => $uploads_base ?: ( $current['uploads_base'] ?? '' )
         ];
 
         if ( empty( $new['host'] ) || empty( $new['dbname'] ) || empty( $new['user'] ) ) {
@@ -160,6 +163,15 @@ function render_settings_page() {
                 <tr>
                     <th scope="row"><label for="hm_prefix"><?php esc_html_e( 'Prefixo (ex: wp_)', 'hacklabr' ); ?></label></th>
                     <td><input name="hm[prefix]" id="hm_prefix" type="text" class="regular-text" value="<?php echo esc_attr( $current['prefix'] ); ?>" autocomplete="off"></td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="hm_uploads_base"><?php esc_html_e( 'Base de uploads remotos', 'hacklabr' ); ?></label></th>
+                    <td>
+                        <input name="hm[uploads_base]" id="hm_uploads_base" type="text" class="regular-text" value="<?php echo esc_attr( $current['uploads_base'] ?? '' ); ?>" placeholder="https://site-antigo/wp-content/uploads" autocomplete="off">
+                        <p class="description">
+                            <?php esc_html_e( 'Ex.: https://site-antigo/wp-content/uploads (usado para reescrever URLs e baixar mídia na etapa 2).', 'hacklabr' ); ?>
+                        </p>
+                    </td>
                 </tr>
                 <tr>
                     <th scope="row"><?php esc_html_e( 'É multisite?', 'hacklabr' ); ?></th>

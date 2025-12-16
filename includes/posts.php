@@ -16,15 +16,23 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 function import_remote_posts( array $args = [] ): array {
     $defaults = [
-        'fetch'      => ['numberposts' => 10],
-        'media'      => true,
-        'dry_run'    => false,
-        'fn_pre'     => null,
-        'fn_pos'     => null,
-        'write_mode' => 'upsert'
+        'fetch'        => ['numberposts' => 10],
+        'media'        => true,
+        'dry_run'      => false,
+        'fn_pre'       => null,
+        'fn_pos'       => null,
+        'uploads_base' => '',
+        'write_mode'   => 'upsert'
     ];
 
     $options = wp_parse_args( $args, $defaults );
+
+    if ( $options['uploads_base'] === '' ) {
+        $creds = get_credentials();
+        if ( ! empty( $creds['uploads_base'] ) ) {
+            $options['uploads_base'] = (string) $creds['uploads_base'];
+        }
+    }
 
     $fetch = (array) ( $options['fetch'] ?? [] );
     unset( $fetch['fields'] );
@@ -101,6 +109,12 @@ function import_remote_posts( array $args = [] ): array {
         $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
 
         $postarr['meta_input'] = [];
+
+        $uploads_base = (string) ( $options['uploads_base'] ?? '' );
+        if ( $uploads_base !== '' ) {
+            $postarr['meta_input']['_hacklab_migration_uploads_base'] = $uploads_base;
+        }
+
         $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
         $postarr['meta_input']['_hacklab_migration_source_meta']['post_type'] = $remote_type;
         $postarr['meta_input']['_hacklab_migration_last_updated'] = time();

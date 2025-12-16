@@ -22,7 +22,8 @@ function credential_defaults(): array {
         'charset'      => 'utf8mb4',
         'collate'      => 'utf8mb4_unicode_520_ci',
         'prefix'       => 'wp_',
-        'is_multisite' => 0
+        'is_multisite' => 0,
+        'uploads_base' => ''
     ];
 }
 
