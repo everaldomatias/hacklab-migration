@@ -240,8 +240,8 @@ function normalize_attached_file_for_single( string $attached_file, ?int $remote
             $dir  = $dir === '.' ? '' : $dir;
         }
 
-        if ( $file !== '' && strpos( $file, $remote_blog_id . '_' ) !== 0 ) {
-            $file = $remote_blog_id . '_' . $file;
+        if ( $file !== '' && strpos( $file, $remote_blog_id . '-' ) !== 0 ) {
+            $file = $remote_blog_id . '-' . $file;
         }
 
         $attached_file = $dir !== '' ? trailingslashit( $dir ) . $file : $file;
