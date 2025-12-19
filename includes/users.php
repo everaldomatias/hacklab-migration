@@ -452,7 +452,7 @@ function get_user_by_meta_data( string $meta_key, $meta_value ): int {
     return (int) $user_id;
 }
 
-function import_remote_user( int $remote_user_id, int $blog_id = 1, bool $dry_run = false ): int {
+function import_remote_user( int $remote_user_id, int $blog_id = 1, bool $dry_run = false, int $run_id = 0 ): int {
     global $wpdb;
 
     $ext = get_external_wpdb();
@@ -668,6 +668,10 @@ function import_remote_user( int $remote_user_id, int $blog_id = 1, bool $dry_ru
         }
 
         update_user_meta( $target_user_id, '_hacklab_migration_source_meta', $source_meta );
+
+        if ( $run_id > 0 ) {
+            update_user_meta( $target_user_id, '_hacklab_migration_import_run_id', $run_id );
+        }
     } finally {
         remove_filter( 'send_password_change_email', '__return_false', 999 );
         remove_filter( 'send_email_change_email', '__return_false', 999 );

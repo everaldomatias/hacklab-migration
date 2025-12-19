@@ -73,6 +73,7 @@ function import_remote_terms( array $args ) : array {
         'dry_run'     => false,
         'fn_pre'      => null,
         'fn_pos'      => null,
+        'run_id'      => 0,
     ];
 
     $o = wp_parse_args( $args, $defaults );
@@ -370,6 +371,11 @@ function import_remote_terms( array $args ) : array {
 
                 if ( $blog_id ) {
                     update_term_meta( $local_term_id, '_hacklab_migration_source_blog', $blog_id );
+                }
+
+                $run_id = (int) ( $o['run_id'] ?? 0 );
+                if ( $run_id > 0 ) {
+                    update_term_meta( $local_term_id, '_hacklab_migration_import_run_id', $run_id );
                 }
 
                 // fn_pos: pós-processamento (ex.: log, relações extras, etc.)

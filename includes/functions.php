@@ -19,16 +19,23 @@ function run_import( array $args = [] ) : array {
         'fetch'             => ['numberposts' => 10],
         'fn_pos'            => null,
         'fn_pre'            => null,
+        'assign_terms'      => true,
+        'map_users'         => true,
         'meta_ops'          => [],
         'term_add'          => [],
         'term_set'          => [],
         'term_rm'           => [],
         'target_post_type'  => '',
         'with_media'        => true,
-        'write_mode'        => 'upsert'
+        'write_mode'        => 'upsert',
+        'run_id'            => 0
     ];
 
     $options = wp_parse_args( $args, $defaults );
+
+    if ( (int) $options['run_id'] <= 0 && ! $options['dry_run'] ) {
+        $options['run_id'] = next_import_run_id();
+    }
 
     if ( empty( $options['uploads_base'] ) ) {
         $creds = get_credentials();
@@ -43,13 +50,16 @@ function run_import( array $args = [] ) : array {
         'dry_run'          => $options['dry_run'],
         'fn_pre'           => $options['fn_pre'],
         'fn_pos'           => $options['fn_pos'],
+        'assign_terms'     => (bool) $options['assign_terms'],
+        'map_users'        => (bool) $options['map_users'],
         'meta_ops'         => (array) $options['meta_ops'],
         'term_add'         => (array) $options['term_add'],
         'term_set'         => (array) $options['term_set'],
         'term_rm'          => (array) $options['term_rm'],
         'target_post_type' => (string) $options['target_post_type'],
         'uploads_base'     => (string) $options['uploads_base'],
-        'write_mode'       => $options['write_mode']
+        'write_mode'       => $options['write_mode'],
+        'run_id'           => (int) $options['run_id']
     ] );
 
     $rows = $posts_summary['rows'] ?? [];
@@ -75,13 +85,15 @@ function run_import( array $args = [] ) : array {
             'dry_run'      => $options['dry_run'],
             'local_map'    => $map,
             'uploads_base' => (string) $options['uploads_base'],
-            'rows'         => $rows
+            'rows'         => $rows,
+            'run_id'       => (int) $options['run_id']
         ] );
     }
 
     return [
         'posts'       => $posts_summary,
         'attachments' => $attachments_summary,
+        'run_id'      => (int) $options['run_id'],
         'errors'      => array_merge(
             (array) ( $posts_summary['errors'] ?? [] ),
             (array) ( $attachments_summary['errors'] ?? [] )
@@ -231,7 +243,7 @@ function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, ar
     return $out;
 }
 
-function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_by_tax, array $tax_map = [], ?int $blog_id = null ) : void {
+function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_by_tax, array $tax_map = [], ?int $blog_id = null, int $run_id = 0 ) : void {
     if ( ! $terms_by_tax ) return;
 
     $allowed_tax = array_fill_keys( get_object_taxonomies( $post_type, 'names' ), true );
@@ -285,6 +297,8 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
                 }
             }
 
+            $created_term = false;
+
             if ( $local_term_id <= 0 ) {
                 $insert_args = [];
 
@@ -324,6 +338,7 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
                 $ins = wp_insert_term( $name !== '' ? $name : $slug, $local_tax, $insert_args );
                 if ( ! is_wp_error( $ins ) && ! empty( $ins['term_id'] ) ) {
                     $local_term_id = (int) $ins['term_id'];
+                    $created_term = true;
                 }
             }
 
@@ -358,6 +373,10 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
                     if ( $blog_id ) {
                         update_term_meta( $local_term_id, '_hacklab_migration_source_blog', $blog_id );
                     }
+                }
+
+                if ( $run_id > 0 && $created_term ) {
+                    update_term_meta( $local_term_id, '_hacklab_migration_import_run_id', $run_id );
                 }
 
                 $meta_synced[ $meta_sync_key ] = true;
@@ -1118,4 +1137,23 @@ function remove_divi_tags( $content ) {
     $content = trim( $content );
 
     return $content;
+}
+
+
+/**
+ * Gera e retorna um ID sequencial para a execução atual de importação.
+ *
+ * @return int ID sequencial (>=1) ou 0 em caso de falha.
+ */
+function next_import_run_id(): int {
+    $current = (int) get_option( 'hm_import_run_last', 0 );
+    $next    = max( 1, $current + 1 );
+
+    if ( get_option( 'hm_import_run_last', null ) === null ) {
+        add_option( 'hm_import_run_last', $next, '', 'no' );
+        return $next;
+    }
+
+    $ok = update_option( 'hm_import_run_last', $next, false );
+    return $ok ? $next : 0;
 }

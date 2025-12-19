@@ -208,6 +208,16 @@ class Commands {
                     $options['with_media'] = self::to_bool( $argument_value, true );
                     break;
 
+                case 'assign_terms':
+                case 'with_terms':
+                    $options['assign_terms'] = self::to_bool( $argument_value, true );
+                    break;
+
+                case 'map_users':
+                case 'with_users':
+                    $options['map_users'] = self::to_bool( $argument_value, true );
+                    break;
+
                 case 'fn_pre':
                 case 'fn-pre':
                     if ( is_string( $argument_value ) && $argument_value !== '' ) {
@@ -271,6 +281,14 @@ class Commands {
         $options['term_set'] = $options['term_set'] ?? [];
         $options['term_rm']  = $options['term_rm']  ?? [];
 
+        if ( ! array_key_exists( 'assign_terms', $options ) ) {
+            $options['assign_terms'] = true;
+        }
+
+        if ( ! array_key_exists( 'map_users', $options ) ) {
+            $options['map_users'] = true;
+        }
+
         if ( ! array_key_exists( 'dry_run', $options ) ) {
             $options['dry_run'] = false;
         }
@@ -305,6 +323,7 @@ class Commands {
 
         $posts       = $summary['posts'] ?? [];
         $attachments = $summary['attachments'] ?? [];
+        $run_id      = (int) ( $summary['run_id'] ?? 0 );
 
         $posts_data = [
             'found_posts' => (int) ( $posts['found_posts'] ?? 0 ),
@@ -326,6 +345,10 @@ class Commands {
 
         \WP_CLI::line();
         \WP_CLI::line( $separator );
+
+        if ( $run_id > 0 ) {
+            \WP_CLI::line( 'Import run_id: ' . $run_id );
+        }
         \WP_CLI::line( 'Posts:' );
 
         foreach ( $posts_data as $label => $value ) {
@@ -588,7 +611,12 @@ class Commands {
         $blog_id = (int) $options['blog_id'];
         $dry_run = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
 
-        $result = import_remote_user( $remote_user_id, $blog_id, $dry_run );
+        $run_id = 0;
+        if ( ! $dry_run ) {
+            $run_id = next_import_run_id();
+        }
+
+        $result = import_remote_user( $remote_user_id, $blog_id, $dry_run, $run_id );
 
         if ( $result ) {
             \WP_CLI::success( "Usuário importado/atualizado com sucesso! ID: $result" );
@@ -757,7 +785,8 @@ class Commands {
             'chunk'       => (int) $options['chunk'],
             'dry_run'     => \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false ),
             'fn_pre'      => $fn_pre,
-            'fn_pos'      => $fn_pos
+            'fn_pos'      => $fn_pos,
+            'run_id'      => ( ! \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false ) ) ? next_import_run_id() : 0,
         ];
 
         \WP_CLI::log( "Iniciando importação de termos..." );

@@ -18,7 +18,8 @@ function import_remote_attachments( array $args = [] ) : array {
         'dry_run'      => false,
         'local_map'    => [],
         'uploads_base' => '',
-        'rows'         => []
+        'rows'         => [],
+        'run_id'       => 0
     ];
 
     $options = wp_parse_args( $args, $defaults );
@@ -38,7 +39,7 @@ function import_remote_attachments( array $args = [] ) : array {
 
     if ( ! $rows ) return $summary;
 
-    $blog_id = (int) $options['blog_id'];
+    $blog_id = max( 1, (int) $options['blog_id'] );
     $uploads = wp_upload_dir();
 
     // Registrar attachments
@@ -46,7 +47,10 @@ function import_remote_attachments( array $args = [] ) : array {
         $att = register_attachments(
             $rows,
             $blog_id,
-            ['chunk' => (int) $options['chunk']]
+            [
+                'chunk'  => (int) $options['chunk'],
+                'run_id' => (int) $options['run_id'],
+            ]
         );
 
         $summary['map']           = $att['map'] ?? [];
@@ -412,10 +416,11 @@ function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = nul
     return $out;
 }
 
-function register_local_attachments( array $rpost, array $rmeta, ?int $remote_blog_id ): int {
+function register_local_attachments( array $rpost, array $rmeta, ?int $remote_blog_id, int $run_id = 0 ): int {
+    $remote_blog_id = $remote_blog_id ? max( 1, (int) $remote_blog_id ) : null;
     $uploads = wp_upload_dir();
     $remote_attached = (string) ($rmeta['_wp_attached_file'] ?? '');
-    if ($remote_attached === '') return 0;
+    if ( $remote_attached === '' ) return 0;
 
     $primary_attached = normalize_attached_file_for_single( $remote_attached, $remote_blog_id );
     $candidates = [$primary_attached];
@@ -505,6 +510,7 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
     if ( ! empty( $rpost['ID'] ) )   update_post_meta( $att_id, '_hacklab_migration_source_id', (int) $rpost['ID'] );
     if ( ! empty( $rpost['guid'] ) ) update_post_meta( $att_id, '_hacklab_migration_source_url', esc_url_raw( (string) $rpost['guid'] ) );
     if ( $remote_blog_id )           update_post_meta( $att_id, '_hacklab_migration_source_blog', (int) $remote_blog_id );
+    if ( $run_id > 0 )               update_post_meta( $att_id, '_hacklab_migration_import_run_id', $run_id );
 
     return (int) $att_id;
 }
@@ -616,7 +622,9 @@ function collect_needed_remote_attachments( array $rows, ?int $remote_blog_id ):
 function register_attachments( array $rows, int $remote_blog_id, array $opts = [] ) : array {
     $opts = wp_parse_args( $opts, [
         'chunk'    => 500,
+        'run_id'   => 0,
     ] );
+    $remote_blog_id = max( 1, (int) $remote_blog_id );
 
     $summary = [
         'map'           => [],
@@ -655,7 +663,8 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
             $att_id = register_local_attachments(
                 $rpost,
                 $rmeta,
-                $remote_blog_id
+                $remote_blog_id,
+                (int) $opts['run_id']
             );
 
             if ( $att_id > 0 ) {

@@ -21,13 +21,16 @@ function import_remote_posts( array $args = [] ): array {
         'dry_run'      => false,
         'fn_pre'       => null,
         'fn_pos'       => null,
+        'assign_terms' => true,
+        'map_users'    => true,
         'meta_ops'     => [],
         'term_add'     => [],
         'term_set'     => [],
         'term_rm'      => [],
         'target_post_type' => '',
         'uploads_base' => '',
-        'write_mode'   => 'upsert'
+        'write_mode'   => 'upsert',
+        'run_id'       => 0
     ];
 
     $options = wp_parse_args( $args, $defaults );
@@ -68,7 +71,7 @@ function import_remote_posts( array $args = [] ): array {
         return $summary;
     }
 
-    $blog_id = (int) ( $options['fetch']['blog_id'] ?? ( $args['blog_id'] ?? 1 ) );
+    $blog_id = max( 1, (int) ( $options['fetch']['blog_id'] ?? ( $args['blog_id'] ?? 1 ) ) );
 
     $remote_ids = array_map( static fn( $r ) => (int) $r['ID'], $rows );
     $terms_map  = fetch_remote_terms_for_posts( $remote_ids, $blog_id );
@@ -84,9 +87,13 @@ function import_remote_posts( array $args = [] ): array {
 
     foreach ( $rows as $row ) {
         $remote_id     = (int) $row['ID'];
-        $remote_type   = post_type_exists( $row['post_type'] ) ? (string) $row['post_type'] : '';
-        $target_type   = sanitize_key( (string) ( $options['target_post_type'] ?? '' ) );
-        $post_type     = $target_type !== '' ? $target_type : $remote_type;
+        $remote_type_raw = (string) ( $row['post_type'] ?? '' );
+        $remote_type     = sanitize_key( $remote_type_raw );
+        $remote_type_saved = $remote_type !== '' ? $remote_type : 'post';
+
+        $target_type = sanitize_key( (string) ( $options['target_post_type'] ?? '' ) );
+        $post_type_remote_for_wp = post_type_exists( $remote_type ) ? $remote_type : 'post';
+        $post_type = $target_type !== '' ? $target_type : $post_type_remote_for_wp;
         $remote_status = (string) $row['post_status'];
 
         // Verifica se já foi importado
@@ -94,7 +101,13 @@ function import_remote_posts( array $args = [] ): array {
         $is_update = $existing > 0;
 
         $post_status = in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'publish';
-        $post_author = $row['post_author'] ? find_local_user( $row['post_author'], $blog_id ) : 0;
+        $remote_author = (int) ( $row['post_author'] ?? 0 );
+        $post_author = 0;
+
+        if ( $options['map_users'] ) {
+            $post_author = $remote_author ? find_local_user( $remote_author, $blog_id ) : 0;
+        }
+
         $post_name   = (string) ( $row['post_name'] ?? '' );
 
         if ( $post_name === '' ) {
@@ -116,6 +129,20 @@ function import_remote_posts( array $args = [] ): array {
         $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
 
         $postarr['meta_input'] = [];
+        $remote_parent = isset( $row['post_parent'] ) ? (int) $row['post_parent'] : 0;
+
+        if ( $remote_author > 0 ) {
+            $postarr['meta_input']['_hacklab_migration_remote_author'] = $remote_author;
+        }
+
+        if ( $remote_parent >= 0 ) {
+            $postarr['meta_input']['_hacklab_migration_remote_parent'] = $remote_parent;
+        }
+
+        $run_id = (int) ( $options['run_id'] ?? 0 );
+        if ( $run_id > 0 ) {
+            $postarr['meta_input'][ '_hacklab_migration_import_run_id' ] = $run_id;
+        }
 
         $uploads_base = (string) ( $options['uploads_base'] ?? '' );
         if ( $uploads_base !== '' ) {
@@ -123,15 +150,19 @@ function import_remote_posts( array $args = [] ): array {
         }
 
         $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
-        $postarr['meta_input']['_hacklab_migration_source_post_type'] = $remote_type;
+        $postarr['meta_input']['_hacklab_migration_source_post_type'] = $remote_type_saved;
         $postarr['meta_input']['_hacklab_migration_last_updated'] = time();
 
         if ( ! empty( $post_meta['_edit_last'] ) ) {
             $remote_user_id = (int) $post_meta['_edit_last'];
-            $local_user_id = find_local_user( $remote_user_id, $blog_id );
+            $local_user_id = 0;
 
-            if ( ! $local_user_id ) {
-                $local_user_id = import_remote_user( $remote_user_id, $blog_id, $options['dry_run'] );
+            if ( $options['map_users'] ) {
+                $local_user_id = find_local_user( $remote_user_id, $blog_id );
+
+                if ( ! $local_user_id ) {
+                    $local_user_id = import_remote_user( $remote_user_id, $blog_id, $options['dry_run'], $run_id );
+                }
             }
 
             $post_meta['_edit_last'] = (int) $local_user_id;
@@ -199,18 +230,36 @@ function import_remote_posts( array $args = [] ): array {
             continue;
         }
 
+        if ( get_post_meta( $local_id, '_hacklab_migration_source_id', true ) === '' ) {
+            update_post_meta( $local_id, '_hacklab_migration_source_id', $remote_id );
+        }
+
+        if ( get_post_meta( $local_id, '_hacklab_migration_source_blog', true ) === '' ) {
+            update_post_meta( $local_id, '_hacklab_migration_source_blog', $blog_id );
+        }
+
+        if ( get_post_meta( $local_id, '_hacklab_migration_source_post_type', true ) === '' ) {
+            update_post_meta( $local_id, '_hacklab_migration_source_post_type', $remote_type );
+        }
+
         $remote_terms = $row['remote_terms'] ?? [];
         $local_terms = $row['local_terms'] ?? [];
 
-        $row_terms = array_merge( $remote_terms, $local_terms );
-
-        // Co Authors Plus
-        if ( cap_instance() && ! empty ( $row_terms['author'] ) ) {
-            cap_assign_coauthors_to_post( $local_id, $row_terms );
-            unset( $row_terms['author'] );
+        if ( ! $options['assign_terms'] && $remote_terms ) {
+            update_post_meta( $local_id, '_hacklab_migration_remote_terms', $remote_terms );
         }
 
-        ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms, [], $blog_id );
+        if ( $options['assign_terms'] ) {
+            $row_terms = array_merge( $remote_terms, $local_terms );
+
+            // Co Authors Plus
+            if ( cap_instance() && ! empty ( $row_terms['author'] ) ) {
+                cap_assign_coauthors_to_post( $local_id, $row_terms );
+                unset( $row_terms['author'] );
+            }
+
+            ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $row_terms, [], $blog_id, $run_id );
+        }
 
         if ( ! $options['dry_run'] && ( ! empty( $options['term_set'] ) || ! empty( $options['term_add'] ) || ! empty( $options['term_rm'] ) ) ) {
             $prepare_terms = static function ( $value ): array {
