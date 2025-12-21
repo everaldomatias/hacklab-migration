@@ -17,11 +17,11 @@
  * @return string             Nome da tabela `posts` remota apropriada.
  *
  */
-function resolve_remote_posts_table( array $creds, ?int $blog_id ): string {
+function resolve_remote_posts_table( array $creds, ?int $blog_id, bool $force_base_prefix = false ): string {
     $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
     $is_ms  = ! empty( $creds['is_multisite'] );
 
-    if ( ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) {
+    if ( $force_base_prefix || ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) {
         return $prefix . 'posts';
     }
 
@@ -46,11 +46,11 @@ function resolve_remote_posts_table( array $creds, ?int $blog_id ): string {
  * @return string             Nome da tabela `postmeta` remota apropriada.
  *
  */
-function resolve_remote_postmeta_table( array $creds, ?int $blog_id ): string {
+function resolve_remote_postmeta_table( array $creds, ?int $blog_id, bool $force_base_prefix = false ): string {
     $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
     $is_ms  = ! empty( $creds['is_multisite'] );
 
-    if ( ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) {
+    if ( $force_base_prefix || ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) {
         return $prefix . 'postmeta';
     }
 
@@ -81,10 +81,10 @@ function resolve_remote_postmeta_table( array $creds, ?int $blog_id ): string {
  *                            - 'term_taxonomy'
  *                            - 'term_relationships'
  */
-function resolve_remote_terms_tables( array $creds, ?int $blog_id ): array {
+function resolve_remote_terms_tables( array $creds, ?int $blog_id, bool $force_base_prefix = false ): array {
     $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
     $is_ms  = ! empty( $creds['is_multisite'] );
-    $mid    = ( ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) ? '' : ( (int) $blog_id . '_' );
+    $mid    = ( $force_base_prefix || ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) ? '' : ( (int) $blog_id . '_' );
 
     return [
         'terms'              => $prefix . $mid . 'terms',
@@ -117,4 +117,3 @@ function resolve_remote_usermeta_table( array $creds ): string {
     $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
     return $prefix . 'usermeta';
 }
-

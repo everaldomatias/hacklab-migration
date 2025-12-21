@@ -74,6 +74,7 @@ function import_remote_terms( array $args ) : array {
         'fn_pre'      => null,
         'fn_pos'      => null,
         'run_id'      => 0,
+        'force_base_prefix' => false,
     ];
 
     $o = wp_parse_args( $args, $defaults );
@@ -93,9 +94,10 @@ function import_remote_terms( array $args ) : array {
     }
 
     $blog_id = $o['blog_id'] ? (int) $o['blog_id'] : 1;
+    $force_base_prefix = (bool) $o['force_base_prefix'];
 
     $creds  = get_credentials();
-    $tables = resolve_remote_terms_tables( $creds, $blog_id );
+    $tables = resolve_remote_terms_tables( $creds, $blog_id, $force_base_prefix );
 
     if (
         empty( $tables['terms'] ) ||

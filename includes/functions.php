@@ -26,6 +26,7 @@ function run_import( array $args = [] ) : array {
         'term_set'          => [],
         'term_rm'           => [],
         'target_post_type'  => '',
+        'force_base_prefix' => false,
         'with_media'        => true,
         'write_mode'        => 'upsert',
         'run_id'            => 0
@@ -57,6 +58,7 @@ function run_import( array $args = [] ) : array {
         'term_set'         => (array) $options['term_set'],
         'term_rm'          => (array) $options['term_rm'],
         'target_post_type' => (string) $options['target_post_type'],
+        'force_base_prefix'=> (bool) $options['force_base_prefix'],
         'uploads_base'     => (string) $options['uploads_base'],
         'write_mode'       => $options['write_mode'],
         'run_id'           => (int) $options['run_id']
@@ -85,6 +87,7 @@ function run_import( array $args = [] ) : array {
             'dry_run'      => $options['dry_run'],
             'local_map'    => $map,
             'uploads_base' => (string) $options['uploads_base'],
+            'force_base_prefix' => (bool) $options['force_base_prefix'],
             'rows'         => $rows,
             'run_id'       => (int) $options['run_id']
         ] );
@@ -106,7 +109,7 @@ function run_import( array $args = [] ) : array {
  */
 function log_message( string $message, string $level = 'info' ) : void {}
 
-function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, array $only_tax = [] ): array {
+function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, array $only_tax = [], bool $force_base_prefix = false ): array {
     $ext = get_external_wpdb();
     if ( ! $ext instanceof \wpdb ) return [];
 
@@ -114,7 +117,7 @@ function fetch_remote_terms_for_posts( array $post_ids, ?int $blog_id = null, ar
     if ( ! $post_ids ) return [];
 
     $creds  = get_credentials();
-    $tables = resolve_remote_terms_tables( $creds, $blog_id );
+    $tables = resolve_remote_terms_tables( $creds, $blog_id, $force_base_prefix );
 
     if (
         empty( $tables['term_taxonomy'] )
@@ -402,7 +405,7 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
     }
 }
 
-function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_id ) {
+function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_id, bool $force_base_prefix = false ) {
     if ( ! $rows ) {
         return $rows;
     }
@@ -414,7 +417,7 @@ function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_
         return $rows;
     }
 
-    $postmeta = resolve_remote_postmeta_table( $creds, $blog_id );
+    $postmeta = resolve_remote_postmeta_table( $creds, $blog_id, $force_base_prefix );
 
     $ph_ids = implode( ',', array_fill( 0, count( $post_ids ), '%d' ) );
     $params = $post_ids;
@@ -593,7 +596,9 @@ function get_remote_posts( array $args = [] ) {
 
     $fields = ( $a['fields'] === 'ids' ) ? 'ids' : 'all';
 
-    $table_posts = resolve_remote_posts_table( $creds, $a['blog_id'] );
+    $force_base_prefix = ! empty( $a['force_base_prefix'] );
+
+    $table_posts = resolve_remote_posts_table( $creds, $a['blog_id'], $force_base_prefix );
     $table_posts_quoted = $table_posts;
 
     $where_sql = [];
@@ -628,7 +633,7 @@ function get_remote_posts( array $args = [] ) {
     }
 
     if ( $tax_queries ) {
-        $tables = resolve_remote_terms_tables( $creds, $a['blog_id'] );
+        $tables = resolve_remote_terms_tables( $creds, $a['blog_id'], $force_base_prefix );
 
         $table_terms              = $tables['terms'];
         $table_term_taxonomy      = $tables['term_taxonomy'];
@@ -786,7 +791,7 @@ function get_remote_posts( array $args = [] ) {
     $rows = $ext->get_results( $prepared, ARRAY_A );
 
     if ( $rows ) {
-        $rows = attach_meta_to_rows( $ext, $creds, $rows, $a['blog_id'] );
+        $rows = attach_meta_to_rows( $ext, $creds, $rows, $a['blog_id'], $force_base_prefix );
     }
 
     return $rows ?: [];

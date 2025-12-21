@@ -28,6 +28,7 @@ function import_remote_posts( array $args = [] ): array {
         'term_set'     => [],
         'term_rm'      => [],
         'target_post_type' => '',
+        'force_base_prefix' => false,
         'uploads_base' => '',
         'write_mode'   => 'upsert',
         'run_id'       => 0
@@ -74,7 +75,7 @@ function import_remote_posts( array $args = [] ): array {
     $blog_id = max( 1, (int) ( $options['fetch']['blog_id'] ?? ( $args['blog_id'] ?? 1 ) ) );
 
     $remote_ids = array_map( static fn( $r ) => (int) $r['ID'], $rows );
-    $terms_map  = fetch_remote_terms_for_posts( $remote_ids, $blog_id );
+    $terms_map  = fetch_remote_terms_for_posts( $remote_ids, $blog_id, [], (bool) $options['force_base_prefix'] );
 
     foreach ( $rows as &$r ) {
         $rid = (int) $r['ID'];

@@ -247,6 +247,10 @@ class Commands {
 
                     break;
 
+                case 'force_base_prefix':
+                    $options['force_base_prefix'] = self::to_bool( $argument_value ?? true );
+                    break;
+
                 default:
                     break;
             }
@@ -593,7 +597,8 @@ class Commands {
     static function cmd_import_user( $args, $command_args ) {
         $defaults = [
             'blog_id'        => 1,
-            'dry_run'        => false
+            'dry_run'        => false,
+            'force_base_prefix' => false,
         ];
 
         if ( empty( $args[0] ) ) {
@@ -610,13 +615,14 @@ class Commands {
 
         $blog_id = (int) $options['blog_id'];
         $dry_run = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
+        $force_base_prefix = \WP_CLI\Utils\get_flag_value( $command_args, 'force_base_prefix', false );
 
         $run_id = 0;
         if ( ! $dry_run ) {
             $run_id = next_import_run_id();
         }
 
-        $result = import_remote_user( $remote_user_id, $blog_id, $dry_run, $run_id );
+        $result = import_remote_user( $remote_user_id, $blog_id, $dry_run, $run_id, $force_base_prefix );
 
         if ( $result ) {
             \WP_CLI::success( "Usuário importado/atualizado com sucesso! ID: $result" );
@@ -786,6 +792,7 @@ class Commands {
             'dry_run'     => \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false ),
             'fn_pre'      => $fn_pre,
             'fn_pos'      => $fn_pos,
+            'force_base_prefix' => \WP_CLI\Utils\get_flag_value( $options, 'force_base_prefix', false ),
             'run_id'      => ( ! \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false ) ) ? next_import_run_id() : 0,
         ];
 
