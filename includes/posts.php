@@ -46,6 +46,7 @@ function import_remote_posts( array $args = [] ): array {
     $fetch = (array) ( $options['fetch'] ?? [] );
     unset( $fetch['fields'] );
     $fetch['fields'] = 'all';
+    $fetch['force_base_prefix'] = $options['force_base_prefix'];
 
     $options['fetch'] = $fetch;
 

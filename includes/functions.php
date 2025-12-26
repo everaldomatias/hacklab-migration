@@ -547,7 +547,8 @@ function get_remote_posts( array $args = [] ) {
         'modified_before'   => null,
         'id_gte'            => null,
         'id_lte'            => null,
-        'tax_query'         => []
+        'tax_query'         => [],
+        'force_base_prefix' => false
     ];
 
     foreach ( $args as $key => $value ) {
