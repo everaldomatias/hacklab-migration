@@ -15,11 +15,12 @@ function import_remote_users( array $args ) : array {
     global $wpdb;
 
     $defaults = [
-        'blog_id'     => 1,
-        'include_ids' => [],
-        'exclude_ids' => [],
-        'chunk'       => 500,
-        'dry_run'     => false
+        'blog_id'           => 1,
+        'include_ids'       => [],
+        'exclude_ids'       => [],
+        'chunk'             => 500,
+        'force_base_prefix' => false,
+        'dry_run'           => false
     ];
 
     $o = wp_parse_args( $args, $defaults );
@@ -41,7 +42,7 @@ function import_remote_users( array $args ) : array {
     }
 
     $creds = get_credentials();
-    $remote_prefix  = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+    $remote_prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
 
     $t_users    = resolve_remote_users_table( $creds );
     $t_usermeta = resolve_remote_usermeta_table( $creds );
@@ -68,7 +69,7 @@ function import_remote_users( array $args ) : array {
     $clauses = [];
     $params  = [];
 
-    if ( $o['blog_id'] && (int) $o['blog_id'] > 1 ) {
+    if ( ! $o['force_base_prefix'] &&  $o['blog_id'] && (int) $o['blog_id'] > 1 ) {
         $rbid = (int) $o['blog_id'];
 
         $base_prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';

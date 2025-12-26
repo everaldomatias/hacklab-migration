@@ -578,6 +578,10 @@ class Commands {
      *   local; o comando apenas resolve o usuário e retorna o ID que seria
      *   utilizado.
      *
+     * [--force_base_prefix=<bool>]
+     * : Use para consultas em sites single.
+     *   Default: false.
+     *
      * ## EXAMPLES
      *
      *     # Importa o usuário remoto de ID 123 do blog 1 (single site ou blog principal):
@@ -660,6 +664,10 @@ class Commands {
      *   local; o comando apenas calcula os usuários que seriam importados/
      *   atualizados e retorna o resumo.
      *
+     * [--force_base_prefix=<bool>]
+     * : Use para consultas em sites single.
+     *   Default: false.
+     *
      * ## EXAMPLES
      *
      *     # Importa todos os usuários do blog 4 (multisite remoto):
@@ -681,13 +689,15 @@ class Commands {
      */
     static function cmd_import_users( $args, $command_args ) {
         $defaults = [
-            'include_ids' => '',
-            'exclude_ids' => '',
-            'chunk'       => 500,
-            'dry_run'     => false
+            'include_ids'       => '',
+            'exclude_ids'       => '',
+            'chunk'             => 500,
+            'force_base_prefix' => false,
+            'dry_run'           => false
         ];
 
         $options = wp_parse_args( $command_args, $defaults );
+        $force_base_prefix = $options['force_base_prefix'];
 
         $blog_id = isset( $args[0] ) ? (int) $args[0] : 1;
 
@@ -715,11 +725,12 @@ class Commands {
         }
 
         $result = import_remote_users( [
-            'blog_id'     => $blog_id,
-            'include_ids' => $include_ids,
-            'exclude_ids' => $exclude_ids,
-            'chunk'       => $chunk,
-            'dry_run'     => $dry_run
+            'blog_id'           => $blog_id,
+            'include_ids'       => $include_ids,
+            'exclude_ids'       => $exclude_ids,
+            'chunk'             => $chunk,
+            'force_base_prefix' => $force_base_prefix,
+            'dry_run'           => $dry_run
         ] );
 
         \WP_CLI::log( '' );
