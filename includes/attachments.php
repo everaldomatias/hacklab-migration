@@ -13,13 +13,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 function import_remote_attachments( array $args = [] ) : array {
     $defaults = [
-        'blog_id'      => 1,
-        'chunk'        => 500,
-        'dry_run'      => false,
-        'local_map'    => [],
-        'uploads_base' => '',
-        'rows'         => [],
-        'run_id'       => 0
+        'blog_id'           => 1,
+        'chunk'             => 500,
+        'dry_run'           => false,
+        'local_map'         => [],
+        'uploads_base'      => '',
+        'rows'              => [],
+        'run_id'            => 0,
+        'force_base_prefix' => false,
     ];
 
     $options = wp_parse_args( $args, $defaults );
@@ -40,6 +41,8 @@ function import_remote_attachments( array $args = [] ) : array {
     if ( ! $rows ) return $summary;
 
     $blog_id = max( 1, (int) $options['blog_id'] );
+    $uploads_blog_id = $blog_id;
+    $strip_sites_prefix = (bool) $options['force_base_prefix'];
     $uploads = wp_upload_dir();
 
     // Registrar attachments
@@ -48,8 +51,11 @@ function import_remote_attachments( array $args = [] ) : array {
             $rows,
             $blog_id,
             [
-                'chunk'  => (int) $options['chunk'],
-                'run_id' => (int) $options['run_id'],
+                'chunk'             => (int) $options['chunk'],
+                'run_id'            => (int) $options['run_id'],
+                'force_base_prefix' => (bool) $options['force_base_prefix'],
+                'uploads_blog_id'   => $uploads_blog_id,
+                'strip_sites_prefix'=> $strip_sites_prefix,
             ]
         );
 
@@ -97,19 +103,19 @@ function import_remote_attachments( array $args = [] ) : array {
         // Buscar o attachment local
         $thumb_lid = (int) ( $summary['map'][$thumb_rid] ?? 0 ); // Local thumbnail id
 
-        if ( $thumb_lid <= 0 ) {
-            $remote_attached = (string) ( $post_meta['_wp_attached_file'] ?? '' );
-            if ( $remote_attached !== '' ) {
-                $candidate = normalize_attached_file_for_single( $remote_attached, $blog_id );
-                $existing = get_posts( [
-                    'post_type'      => 'attachment',
-                    'posts_per_page' => 1,
-                    'post_status'    => 'any',
-                    'meta_key'       => '_wp_attached_file',
-                    'meta_value'     => $candidate,
-                    'fields'         => 'ids',
-                    'no_found_rows'  => true,
-                ] );
+            if ( $thumb_lid <= 0 ) {
+                $remote_attached = (string) ( $post_meta['_wp_attached_file'] ?? '' );
+                if ( $remote_attached !== '' ) {
+                    $candidate = normalize_attached_file_for_single( $remote_attached, $uploads_blog_id, $strip_sites_prefix );
+                    $existing = get_posts( [
+                        'post_type'      => 'attachment',
+                        'posts_per_page' => 1,
+                        'post_status'    => 'any',
+                        'meta_key'       => '_wp_attached_file',
+                        'meta_value'     => $candidate,
+                        'fields'         => 'ids',
+                        'no_found_rows'  => true
+                    ] );
 
                 if ( $existing ) {
                     $thumb_lid = (int) $existing[0];
@@ -132,7 +138,7 @@ function import_remote_attachments( array $args = [] ) : array {
     $old_base = (string) $options['uploads_base'];
 
     if ( ! $options['dry_run'] && $rows ) {
-        $url_map = $old_base !== '' ? build_uploads_url_map( rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $blog_id ) : [];
+        $url_map = $old_base !== '' ? build_uploads_url_map( rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id ) : [];
 
         foreach ( $rows as $row ) {
             $remote_post_id = (int) ( $row['ID'] ?? 0 );
@@ -162,7 +168,7 @@ function import_remote_attachments( array $args = [] ) : array {
                     continue;
                 }
 
-                $new_val = rewrite_meta_attachments_value( $meta_val, $summary['map'], $url_map, $blog_id );
+                $new_val = rewrite_meta_attachments_value( $meta_val, $summary['map'], $url_map, $blog_id, $strip_sites_prefix );
                 if ( $new_val !== $meta_val ) {
                     update_post_meta( $local_post_id, $meta_key, $new_val );
                 }
@@ -203,7 +209,8 @@ function import_remote_attachments( array $args = [] ) : array {
                 $old_content,
                 rtrim( $old_base, '/' ),
                 rtrim( $uploads['baseurl'], '/' ),
-                $blog_id
+                $uploads_blog_id,
+                $strip_sites_prefix
             );
 
             if ( $new_content !== $old_content ) {
@@ -226,8 +233,15 @@ function import_remote_attachments( array $args = [] ) : array {
  * Normaliza o caminho do arquivo anexo (`attached_file`) ao migrar de um ambiente
  * multisite para um site único (single site).
  */
-function normalize_attached_file_for_single( string $attached_file, ?int $remote_blog_id ): string {
+function normalize_attached_file_for_single( string $attached_file, ?int $remote_blog_id, bool $strip_sites_prefix = false ): string {
     $attached_file = ltrim( $attached_file, '/' );
+
+    if ( $strip_sites_prefix && strpos( $attached_file, 'sites/' ) === 0 ) {
+        $segments = explode( '/', $attached_file );
+        if ( count( $segments ) > 2 ) {
+            $attached_file = implode( '/', array_slice( $segments, 2 ) );
+        }
+    }
 
     if ( $remote_blog_id && $remote_blog_id > 1 ) {
         $prefix = 'sites/' . (int) $remote_blog_id . '/';
@@ -257,7 +271,7 @@ function normalize_attached_file_for_single( string $attached_file, ?int $remote
 /**
  * Tenta deduzir o caminho relativo (`attached_file`) de um anexo a partir de uma URL completa.
  */
-function guess_attached_file_from_url( string $url, ?int $remote_blog_id ): string {
+function guess_attached_file_from_url( string $url, ?int $remote_blog_id, bool $strip_sites_prefix = false ): string {
     $path = (string) wp_parse_url( $url, PHP_URL_PATH );
     if ( ! $path ) {
         return '';
@@ -270,6 +284,13 @@ function guess_attached_file_from_url( string $url, ?int $remote_blog_id ): stri
 
     $rel = ltrim( substr( $path, $pos + 9 ), '/' );
 
+    if ( $strip_sites_prefix && strpos( $rel, 'sites/' ) === 0 ) {
+        $segments = explode( '/', $rel );
+        if ( count( $segments ) > 2 ) {
+            $rel = implode( '/', array_slice( $segments, 2 ) );
+        }
+    }
+
     return $rel;
 }
 
@@ -277,7 +298,7 @@ function guess_attached_file_from_url( string $url, ?int $remote_blog_id ): stri
  * Recupera anexos (posts do tipo `attachment`) de um banco de dados remoto do WordPress,
  * a partir de uma lista de IDs.
  */
-function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = null ): array {
+function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = null, bool $force_base_prefix = false ): array {
     $remote_ids = array_values(
         array_unique(
             array_filter(
@@ -297,8 +318,8 @@ function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = nul
     }
 
     $creds  = get_credentials();
-    $t_posts = resolve_remote_posts_table( $creds, $blog_id );
-    $t_meta  = resolve_remote_postmeta_table( $creds, $blog_id );
+    $t_posts = resolve_remote_posts_table( $creds, $blog_id, $force_base_prefix );
+    $t_meta  = resolve_remote_postmeta_table( $creds, $blog_id, $force_base_prefix );
 
     $out   = [];
     $chunk = 1000;
@@ -416,18 +437,19 @@ function fetch_remote_attachments_by_ids( array $remote_ids, ?int $blog_id = nul
     return $out;
 }
 
-function register_local_attachments( array $rpost, array $rmeta, ?int $remote_blog_id, int $run_id = 0 ): int {
-    $remote_blog_id = $remote_blog_id ? max( 1, (int) $remote_blog_id ) : null;
+function register_local_attachments( array $rpost, array $rmeta, ?int $remote_blog_id, int $run_id = 0, ?int $uploads_blog_id = null, bool $strip_sites_prefix = false ): int {
+    $remote_blog_id  = $remote_blog_id ? max( 1, (int) $remote_blog_id ) : null;
+    $uploads_blog_id = $uploads_blog_id ? max( 1, (int) $uploads_blog_id ) : $remote_blog_id;
     $uploads = wp_upload_dir();
     $remote_attached = (string) ($rmeta['_wp_attached_file'] ?? '');
     if ( $remote_attached === '' ) return 0;
 
-    $primary_attached = normalize_attached_file_for_single( $remote_attached, $remote_blog_id );
+    $primary_attached = normalize_attached_file_for_single( $remote_attached, $uploads_blog_id, $strip_sites_prefix );
     $candidates = [$primary_attached];
 
-    if ( $remote_blog_id && $remote_blog_id > 1 ) {
+    if ( $uploads_blog_id && $uploads_blog_id > 1 ) {
         $legacy = ltrim( $remote_attached, '/' );
-        $prefix = 'sites/' . (int) $remote_blog_id . '/';
+        $prefix = 'sites/' . (int) $uploads_blog_id . '/';
         if ( strpos( $legacy, $prefix ) === 0 ) {
             $legacy = substr( $legacy, strlen( $prefix ) );
         }
@@ -499,7 +521,7 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
     update_post_meta( $att_id, '_wp_attached_file', $attached_file );
 
     if ( isset( $rmeta['_wp_attachment_metadata'] ) ) {
-        $normalized_meta = normalize_attachment_metadata_for_single( $rmeta['_wp_attachment_metadata'], $remote_blog_id );
+        $normalized_meta = normalize_attachment_metadata_for_single( $rmeta['_wp_attachment_metadata'], $uploads_blog_id, $strip_sites_prefix );
         update_post_meta( $att_id, '_wp_attachment_metadata', $normalized_meta );
     }
 
@@ -515,11 +537,11 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
     return (int) $att_id;
 }
 
-function collect_attachment_refs_from_meta( array $meta, ?int $remote_blog_id ): array {
+function collect_attachment_refs_from_meta( array $meta, ?int $remote_blog_id, bool $strip_sites_prefix = false ): array {
     $ids   = [];
     $files = [];
 
-    $scan = static function ( $value ) use ( &$ids, &$files, $remote_blog_id, &$scan ): void {
+    $scan = static function ( $value ) use ( &$ids, &$files, $remote_blog_id, $strip_sites_prefix, &$scan ): void {
         if ( is_numeric( $value ) ) {
             $int = (int) $value;
             if ( $int > 0 ) {
@@ -535,12 +557,17 @@ function collect_attachment_refs_from_meta( array $meta, ?int $remote_blog_id ):
                 $ids[ (int) $trim ] = true;
             }
 
-            $rel = guess_attached_file_from_url( $trim, $remote_blog_id );
+            $rel = guess_attached_file_from_url( $trim, $remote_blog_id, $strip_sites_prefix );
             if ( $rel ) {
                 $files[ $rel ] = true;
             }
 
-            if ( $remote_blog_id && strpos( $trim, 'sites/' . (int) $remote_blog_id . '/' ) === 0 ) {
+            if ( $strip_sites_prefix && strpos( $trim, 'sites/' ) === 0 ) {
+                $segments = explode( '/', $trim );
+                if ( count( $segments ) > 2 ) {
+                    $files[ implode( '/', array_slice( $segments, 2 ) ) ] = true;
+                }
+            } elseif ( $remote_blog_id && strpos( $trim, 'sites/' . (int) $remote_blog_id . '/' ) === 0 ) {
                 $files[ ltrim( substr( $trim, strlen( 'sites/' . (int) $remote_blog_id . '/' ) ), '/' ) ] = true;
             }
 
@@ -571,7 +598,7 @@ function collect_attachment_refs_from_meta( array $meta, ?int $remote_blog_id ):
     ];
 }
 
-function collect_needed_remote_attachments( array $rows, ?int $remote_blog_id ): array {
+function collect_needed_remote_attachments( array $rows, ?int $remote_blog_id, bool $strip_sites_prefix = false ): array {
     $ids   = [];
     $files = [];
     $urls  = [];
@@ -595,14 +622,14 @@ function collect_needed_remote_attachments( array $rows, ?int $remote_blog_id ):
 
         foreach ( extract_image_urls( $content ) as $url ) {
             $urls[$url] = true;
-            $rel = guess_attached_file_from_url( $url, $remote_blog_id );
+            $rel = guess_attached_file_from_url( $url, $remote_blog_id, $strip_sites_prefix );
 
             if ( $rel ) {
                 $files[$rel] = true;
             }
         }
 
-        $meta_refs = collect_attachment_refs_from_meta( $meta, $remote_blog_id );
+        $meta_refs = collect_attachment_refs_from_meta( $meta, $remote_blog_id, $strip_sites_prefix );
         foreach ( $meta_refs['ids'] as $mid ) {
             $ids[ $mid ] = true;
         }
@@ -621,10 +648,15 @@ function collect_needed_remote_attachments( array $rows, ?int $remote_blog_id ):
 
 function register_attachments( array $rows, int $remote_blog_id, array $opts = [] ) : array {
     $opts = wp_parse_args( $opts, [
-        'chunk'    => 500,
-        'run_id'   => 0,
+        'chunk'             => 500,
+        'run_id'            => 0,
+        'force_base_prefix' => false,
+        'uploads_blog_id'   => null,
+        'strip_sites_prefix'=> false,
     ] );
     $remote_blog_id = max( 1, (int) $remote_blog_id );
+    $uploads_blog_id = $opts['uploads_blog_id'] ? max( 1, (int) $opts['uploads_blog_id'] ) : $remote_blog_id;
+    $strip_sites_prefix = (bool) $opts['strip_sites_prefix'];
 
     $summary = [
         'map'           => [],
@@ -634,7 +666,7 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
         'errors'        => []
     ];
 
-    $need = collect_needed_remote_attachments( $rows, $remote_blog_id );
+    $need = collect_needed_remote_attachments( $rows, $uploads_blog_id, $strip_sites_prefix );
     $remote_ids = $need['attachment_ids'];
 
     if ( ! $remote_ids ) {
@@ -645,7 +677,7 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
 
     for ( $i = 0; $i < count( $remote_ids ); $i += $chunk ) {
         $ids  = array_slice( $remote_ids, $i, $chunk );
-        $info = fetch_remote_attachments_by_ids( $ids, $remote_blog_id );
+        $info = fetch_remote_attachments_by_ids( $ids, $remote_blog_id, (bool) $opts['force_base_prefix'] );
 
         if ( ! $info ) {
             continue;
@@ -664,11 +696,13 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
                 $rpost,
                 $rmeta,
                 $remote_blog_id,
-                (int) $opts['run_id']
+                (int) $opts['run_id'],
+                $uploads_blog_id,
+                $strip_sites_prefix
             );
 
             if ( $att_id > 0 ) {
-                $attached_file = normalize_attached_file_for_single( (string) ( $rmeta['_wp_attached_file'] ?? '' ), $remote_blog_id );
+                $attached_file = normalize_attached_file_for_single( (string) ( $rmeta['_wp_attached_file'] ?? '' ), $uploads_blog_id, $strip_sites_prefix );
                 $existing = get_posts( [
                     'post_type'      => 'attachment',
                     'posts_per_page' => 1,
@@ -695,21 +729,61 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
     return $summary;
 }
 
-function replace_content_urls( string $html, string $uploads_base, string $new_uploads_base, ?int $remote_blog_id ): string {
+function replace_content_urls( string $html, string $uploads_base, string $new_uploads_base, ?int $remote_blog_id, bool $strip_sites_prefix = false ): string {
     $map = build_uploads_url_map( $uploads_base, $new_uploads_base, $remote_blog_id );
-    return replace_urls_in_content( $html, $map );
+    $out = replace_urls_in_content( $html, $map );
+
+    if ( $strip_sites_prefix ) {
+        $escaped = preg_quote( rtrim( $new_uploads_base, '/' ), '#' );
+        $out = preg_replace( "#({$escaped})/sites/\\d+/#", '$1/', $out );
+
+        if ( $remote_blog_id && $remote_blog_id > 1 ) {
+            $out = prefix_upload_filename( $out, (int) $remote_blog_id );
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * Prefixa o nome do arquivo com o blog_id para evitar colisões quando o conteúdo veio de multisite.
+ */
+function prefix_upload_filename( string $value, int $blog_id ): string {
+    if ( $blog_id <= 1 ) {
+        return $value;
+    }
+
+    $cb = static function ( array $m ) use ( $blog_id ) {
+        $filename = $m[2];
+        if ( strpos( $filename, $blog_id . '-' ) === 0 ) {
+            return $m[0];
+        }
+        return $m[1] . $blog_id . '-' . $filename;
+    };
+
+    $value = preg_replace_callback( '#((?:wp-content/)?uploads/[^"\'\\s?<>]*/)([^/"\'\\s?<>]+)#', $cb, $value );
+
+    $value = preg_replace_callback( '#(^|/)(\\d{4}/\\d{2}/)([^/"\'\\s?<>]+)#', static function ( array $m ) use ( $blog_id ) {
+        $filename = $m[3];
+        if ( strpos( $filename, $blog_id . '-' ) === 0 ) {
+            return $m[0];
+        }
+        return $m[1] . $m[2] . $blog_id . '-' . $filename;
+    }, $value );
+
+    return $value;
 }
 
 /**
  * Remove prefixo de multisite em campos da metadata do attachment (`file` e `sizes[*]['file']`).
  */
-function normalize_attachment_metadata_for_single( $meta, ?int $remote_blog_id ) {
+function normalize_attachment_metadata_for_single( $meta, ?int $remote_blog_id, bool $strip_sites_prefix = false ) {
     if ( ! is_array( $meta ) || ! $meta ) {
         return $meta;
     }
 
     if ( ! empty( $meta['file'] ) && is_string( $meta['file'] ) ) {
-        $meta['file'] = normalize_attached_file_for_single( $meta['file'], $remote_blog_id );
+        $meta['file'] = normalize_attached_file_for_single( $meta['file'], $remote_blog_id, $strip_sites_prefix );
     }
 
     if ( ! empty( $meta['sizes'] ) && is_array( $meta['sizes'] ) ) {
@@ -717,7 +791,20 @@ function normalize_attachment_metadata_for_single( $meta, ?int $remote_blog_id )
             if ( ! is_array( $size ) || empty( $size['file'] ) || ! is_string( $size['file'] ) ) {
                 continue;
             }
-            $meta['sizes'][ $k ]['file'] = normalize_attached_file_for_single( $size['file'], $remote_blog_id );
+            $meta['sizes'][ $k ]['file'] = normalize_attached_file_for_single( $size['file'], $remote_blog_id, $strip_sites_prefix );
+        }
+    }
+
+    if ( $strip_sites_prefix && $remote_blog_id && $remote_blog_id > 1 ) {
+        $meta['file'] = prefix_upload_filename( (string) $meta['file'], (int) $remote_blog_id );
+
+        if ( ! empty( $meta['sizes'] ) && is_array( $meta['sizes'] ) ) {
+            foreach ( $meta['sizes'] as $k => $size ) {
+                if ( empty( $size['file'] ) || ! is_string( $size['file'] ) ) {
+                    continue;
+                }
+                $meta['sizes'][ $k ]['file'] = prefix_upload_filename( (string) $size['file'], (int) $remote_blog_id );
+            }
         }
     }
 
@@ -727,7 +814,7 @@ function normalize_attachment_metadata_for_single( $meta, ?int $remote_blog_id )
 /**
  * Reescreve valores de meta que referenciam mídias (IDs ou URLs/paths) para o ID/URL local.
  */
-function rewrite_meta_attachments_value( $value, array $att_map, array $url_map, ?int $remote_blog_id ) {
+function rewrite_meta_attachments_value( $value, array $att_map, array $url_map, ?int $remote_blog_id, bool $strip_sites_prefix = false ) {
     if ( is_numeric( $value ) ) {
         $int = (int) $value;
         return $att_map[ $int ] ?? $value;
@@ -747,7 +834,13 @@ function rewrite_meta_attachments_value( $value, array $att_map, array $url_map,
             $new_val = strtr( $new_val, $url_map );
         }
 
-        if ( $remote_blog_id && strpos( $new_val, 'sites/' . (int) $remote_blog_id . '/' ) === 0 ) {
+        if ( $strip_sites_prefix ) {
+            $new_val = preg_replace( '#/sites/\\d+/#', '/', $new_val );
+
+            if ( $remote_blog_id && $remote_blog_id > 1 ) {
+                $new_val = prefix_upload_filename( $new_val, (int) $remote_blog_id );
+            }
+        } elseif ( $remote_blog_id && strpos( $new_val, 'sites/' . (int) $remote_blog_id . '/' ) === 0 ) {
             $new_val = ltrim( substr( $new_val, strlen( 'sites/' . (int) $remote_blog_id . '/' ) ), '/' );
         }
 
@@ -757,14 +850,14 @@ function rewrite_meta_attachments_value( $value, array $att_map, array $url_map,
     if ( is_array( $value ) ) {
         $out = [];
         foreach ( $value as $k => $v ) {
-            $out[ $k ] = rewrite_meta_attachments_value( $v, $att_map, $url_map, $remote_blog_id );
+            $out[ $k ] = rewrite_meta_attachments_value( $v, $att_map, $url_map, $remote_blog_id, $strip_sites_prefix );
         }
         return $out;
     }
 
     if ( is_object( $value ) ) {
         $arr = (array) $value;
-        return rewrite_meta_attachments_value( $arr, $att_map, $url_map, $remote_blog_id );
+        return rewrite_meta_attachments_value( $arr, $att_map, $url_map, $remote_blog_id, $strip_sites_prefix );
     }
 
     return $value;
