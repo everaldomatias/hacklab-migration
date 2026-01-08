@@ -94,3 +94,39 @@ function cap_assign_coauthors_to_post( int $post_id, array $row_terms ): void {
 
     $cap->add_coauthors( $post_id, $idents, false );
 }
+
+/**
+ * Callback para run-import: converte um post importado para guest-author do CoAuthors Plus.
+ *
+ * Uso sugerido:
+ *   wp run-import --post_type=guest-author --fn_pos=\\HacklabMigration\\cap_convert_post_to_guest_author ...
+ */
+function cap_convert_post_to_guest_author( int $local_id, array $row, bool $is_update, bool $dry_run ): void {
+    if ( $dry_run ) {
+        return;
+    }
+
+    $post = get_post( $local_id );
+    if ( ! $post instanceof \WP_Post ) {
+        return;
+    }
+
+    $source_meta = get_post_meta( $local_id, '_hacklab_migration_source_meta', true );
+    if ( ! is_array( $source_meta ) ) {
+        $source_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
+    }
+
+    // Preenche metas esperadas pelo CoAuthors Plus para guest-author.
+    if ( function_exists( '\\ensure_guest_author_post' ) ) {
+        \ensure_guest_author_post( $post, $source_meta );
+    }
+
+    $slug = sanitize_title( $post->post_name !== '' ? $post->post_name : ( $post->post_title !== '' ? $post->post_title : $post->ID ) );
+
+    wp_update_post( [
+        'ID'          => $local_id,
+        'post_type'   => 'guest-author',
+        'post_status' => 'publish',
+        'post_name'   => $slug,
+    ] );
+}

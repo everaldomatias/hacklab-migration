@@ -49,3 +49,68 @@ function map_remote_author_to_local( \WP_Post $post ): void {
     }
 }
 
+/**
+ * Sincroniza coautores usando dados do meta de origem e CoAuthors Plus.
+ *
+ * Uso (com hacklab-dev-utils):
+ *   wp modify-posts --q:post_type=migration --fn:\\HacklabMigration\\sync_coauthors_plus
+ *
+ * @param \WP_Post $post
+ */
+function sync_coauthors_plus( \WP_Post $post ): void {
+    if ( ! cap_instance() ) {
+        return;
+    }
+
+    $source_meta = get_post_meta( $post->ID, '_hacklab_migration_source_meta', true );
+    $authors_raw = is_array( $source_meta ) ? ( $source_meta['authors'] ?? [] ) : [];
+
+    if ( ! $authors_raw ) {
+        return;
+    }
+
+    $authors_raw = is_array( $authors_raw ) ? $authors_raw : [ $authors_raw ];
+    $authors = [];
+
+    foreach ( $authors_raw as $a ) {
+        if ( is_string( $a ) ) {
+            // Permite lista simples (ex.: nomes ou slugs separados por vírgula)
+            $parts = array_filter( array_map( 'trim', explode( ',', $a ) ) );
+            foreach ( $parts as $part ) {
+                $slug = sanitize_title( $part );
+                if ( $slug === '' ) {
+                    continue;
+                }
+                $authors[] = [
+                    'slug' => $slug,
+                    'name' => $part,
+                ];
+            }
+            continue;
+        }
+
+        if ( is_array( $a ) ) {
+            $slug  = sanitize_title( (string) ( $a['slug'] ?? $a['user_nicename'] ?? $a['login'] ?? '' ) );
+            if ( $slug === '' && ! empty( $a['name'] ) ) {
+                $slug = sanitize_title( (string) $a['name'] );
+            }
+
+            if ( $slug === '' ) {
+                continue;
+            }
+
+            $authors[] = [
+                'slug'  => $slug,
+                'login' => (string) ( $a['login'] ?? $a['user_login'] ?? '' ),
+                'email' => sanitize_email( (string) ( $a['email'] ?? $a['user_email'] ?? '' ) ),
+                'name'  => (string) ( $a['name'] ?? $a['display_name'] ?? $slug ),
+            ];
+        }
+    }
+
+    if ( ! $authors ) {
+        return;
+    }
+
+    cap_assign_coauthors_to_post( $post->ID, [ 'author' => $authors ] );
+}
