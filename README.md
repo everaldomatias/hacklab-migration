@@ -77,6 +77,15 @@ Rastrear execuções de importação (run_id):
 - A cada `run-import` (e também `import-user` / `import-terms`), o plugin gera um ID sequencial e grava em `_hacklab_migration_import_run_id` nos itens tocados (posts, attachments, users e termos).
 - Exemplo de rollback (posts): `SELECT ID FROM wp_postmeta WHERE meta_key = '_hacklab_migration_import_run_id' AND meta_value = 42;`
 
+Migrar CoAuthors Plus
+
+- Usuários: use `wp import-user <blog_id>` (com `--force_base_prefix=1` se estiver em single) para trazer logins, senhas, activation_key, capabilities e meta.
+- Guest Authors: importe o CPT de autores direto como `guest-author` e converta no pós-insert:
+  - `wp run-import <blog_id> --q:post_type=guest-author --post_type=guest-author --with_media=0 --assign_terms=0 --fn_pos=\\HacklabMigration\\cap_convert_post_to_guest_author`
+  - Isso cria/atualiza guest-authors preservando metas cap-* e marcando `_hacklab_migration_source_*`.
+- Posts: no import normal, `cap_assign_coauthors_to_post` já reaproveita users/guest-authors existentes por slug/login/email; se a origem tem `_hacklab_migration_source_meta['authors']`, rode `wp modify-posts --q:post_type=migration --fn=\\HacklabMigration\\sync_coauthors_plus` para forçar a vinculação.
+- Evite manter um CPT `author` paralelo: converta tudo para `guest-author` e use apenas o fluxo padrão do CoAuthors Plus (taxonomia interna `author` + CPT `guest-author`).
+
 Importar single ➜ single junto com multisite já importados (evitar colisão de blog_id):
 
 - Se você já usou `blog_id=1` para o site principal da rede e quer importar outro single sem colidir, use `--force_base_prefix=1` com um `blog_id` lógico diferente (ex.: 99). Exemplo:
