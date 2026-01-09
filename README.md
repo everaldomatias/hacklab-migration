@@ -86,6 +86,12 @@ Migrar CoAuthors Plus
 - Posts: no import normal, `cap_assign_coauthors_to_post` já reaproveita users/guest-authors existentes por slug/login/email; se a origem tem `_hacklab_migration_source_meta['authors']`, rode `wp modify-posts --q:post_type=migration --fn=\\HacklabMigration\\sync_coauthors_plus` para forçar a vinculação.
 - Evite manter um CPT `author` paralelo: converta tudo para `guest-author` e use apenas o fluxo padrão do CoAuthors Plus (taxonomia interna `author` + CPT `guest-author`).
 
+- Exemplos rápidos:
+  - Importar guest-authors (single → single): `wp run-import 1 --q:post_type=guest-author --post_type=guest-author --with_media=0 --assign_terms=0 --fn_pos=\\HacklabMigration\\cap_convert_post_to_guest_author`
+  - Importar guest-authors com `force_base_prefix` (blog lógico 99): `wp run-import 99 --force_base_prefix=1 --q:post_type=guest-author --post_type=guest-author --with_media=0 --assign_terms=0 --fn_pos=\\HacklabMigration\\cap_convert_post_to_guest_author`
+  - Sincronizar coautores a partir do meta: `wp modify-posts --q:post_type=migration --fn=\\HacklabMigration\\sync_coauthors_plus`
+- Requerimento: o plugin CoAuthors Plus precisa estar ativo durante esses comandos para que guest-authors e vínculos funcionem.
+
 Importar single ➜ single junto com multisite já importados (evitar colisão de blog_id):
 
 - Se você já usou `blog_id=1` para o site principal da rede e quer importar outro single sem colidir, use `--force_base_prefix=1` com um `blog_id` lógico diferente (ex.: 99). Exemplo:
