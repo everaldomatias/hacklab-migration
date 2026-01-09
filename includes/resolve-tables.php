@@ -117,3 +117,17 @@ function resolve_remote_usermeta_table( array $creds ): string {
     $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
     return $prefix . 'usermeta';
 }
+
+/**
+ * Resolve o nome da tabela `options` remota, considerando multisite e blog_id.
+ */
+function resolve_remote_options_table( array $creds, ?int $blog_id, bool $force_base_prefix = false ): string {
+    $prefix = ! empty( $creds['prefix'] ) ? (string) $creds['prefix'] : 'wp_';
+    $is_ms  = ! empty( $creds['is_multisite'] );
+
+    if ( $force_base_prefix || ! $is_ms || ! $blog_id || (int) $blog_id === 1 ) {
+        return $prefix . 'options';
+    }
+
+    return $prefix . ( (int) $blog_id ) . '_options';
+}

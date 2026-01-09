@@ -129,6 +129,27 @@ function render_settings_page() {
             <span style="margin-left:.5em;"><?php echo esc_html( $check_connection['message'] ); ?></span>
         </div>
 
+        <?php
+        $remote_url = null;
+        if ( $check_connection['ok'] ) {
+            $opts = fetch_remote_options( ['siteurl', 'home'], 1 );
+            if ( $opts ) {
+                $siteurl = $opts['siteurl'] ?? '';
+                $home    = $opts['home']    ?? '';
+                if ( $siteurl || $home ) {
+                    $remote_url = $home ?: $siteurl;
+                }
+            }
+        }
+        ?>
+
+        <?php if ( $remote_url ) : ?>
+            <div style="margin:1em 0;padding:10px;border-left:4px solid #46b450;background:#fff;">
+                <strong><?php echo esc_html__( 'URL do site remoto:', 'hacklabr' ); ?></strong>
+                <span style="margin-left:.5em;"><?php echo esc_html( $remote_url ); ?></span>
+            </div>
+        <?php endif; ?>
+
         <form method="post" action="">
             <?php wp_nonce_field( HACKLAB_MIGRATION_NONCE_ACTION ); ?>
 
@@ -203,6 +224,61 @@ function render_settings_page() {
         </ul>
     </div>
     <?php
+}
+
+/**
+ * Busca opções no banco remoto (ex.: siteurl/home).
+ *
+ * @param string[] $option_names
+ * @param int|null $blog_id
+ * @param bool $force_base_prefix
+ * @return array<string,string>
+ */
+function fetch_remote_options( array $option_names, ?int $blog_id = 1, bool $force_base_prefix = false ): array {
+    $option_names = array_values(
+        array_unique(
+            array_filter(
+                array_map( 'sanitize_key', $option_names ),
+                static fn( $v ) => $v !== ''
+            )
+        )
+    );
+
+    if ( ! $option_names ) {
+        return [];
+    }
+
+    $ext = get_external_wpdb();
+    if ( ! $ext instanceof \wpdb ) {
+        return [];
+    }
+
+    $creds = get_credentials();
+    $table = resolve_remote_options_table( $creds, $blog_id, $force_base_prefix );
+    if ( ! $table ) {
+        return [];
+    }
+
+    $ph = implode( ',', array_fill( 0, count( $option_names ), '%s' ) );
+    $sql = "SELECT option_name, option_value FROM {$table} WHERE option_name IN ({$ph})";
+    $prepared = $ext->prepare( $sql, $option_names );
+
+    if ( $prepared === null ) {
+        return [];
+    }
+
+    $rows = $ext->get_results( $prepared, ARRAY_A ) ?: [];
+    $out = [];
+
+    foreach ( $rows as $r ) {
+        $name  = sanitize_key( (string) ( $r['option_name'] ?? '' ) );
+        $value = (string) ( $r['option_value'] ?? '' );
+        if ( $name !== '' ) {
+            $out[ $name ] = $value;
+        }
+    }
+
+    return $out;
 }
 
 /**
