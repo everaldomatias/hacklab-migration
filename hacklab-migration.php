@@ -68,7 +68,7 @@ if ( ! check_requirements() ) {
  * Constantes do plugin
  * -------------------------------------------------------------------------
  */
-define( 'HACKLAB_MIGRATION_VERSION', '0.0.14' );
+define( 'HACKLAB_MIGRATION_VERSION', '0.0.15' );
 define( 'HACKLAB_MIGRATION_FILE', __FILE__ );
 define( 'HACKLAB_MIGRATION_DIR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'HACKLAB_MIGRATION_DIR_URL', plugin_dir_url( __FILE__ ) );
