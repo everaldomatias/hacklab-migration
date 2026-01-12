@@ -88,10 +88,11 @@ function import_remote_posts( array $args = [] ): array {
     $summary['rows'] = $rows;
 
     foreach ( $rows as $row ) {
-        $remote_id     = (int) $row['ID'];
-        $remote_type_raw = (string) ( $row['post_type'] ?? '' );
-        $remote_type     = sanitize_key( $remote_type_raw );
+        $remote_id         = (int) $row['ID'];
+        $remote_type_raw   = (string) ( $row['post_type'] ?? '' );
+        $remote_type       = sanitize_key( $remote_type_raw );
         $remote_type_saved = $remote_type !== '' ? $remote_type : 'post';
+        $post_name         = (string) ( $row['post_name'] ?? '' );
 
         $target_type = sanitize_key( (string) ( $options['target_post_type'] ?? '' ) );
         $post_type_remote_for_wp = post_type_exists( $remote_type ) ? $remote_type : 'post';
@@ -100,6 +101,22 @@ function import_remote_posts( array $args = [] ): array {
 
         // Verifica se já foi importado
         $existing = find_local_post( $remote_id, $blog_id );
+
+        // Fallback de deduplicação para guest-authors por slug
+        if ( $existing <= 0 && $post_type === 'guest-author' && $post_name !== '' ) {
+            $dup = get_posts( [
+                'post_type'      => 'guest-author',
+                'name'           => $post_name,
+                'posts_per_page' => 1,
+                'post_status'    => 'any',
+                'fields'         => 'ids',
+                'no_found_rows'  => true,
+            ] );
+
+            if ( $dup ) {
+                $existing = (int) $dup[0];
+            }
+        }
         $is_update = $existing > 0;
 
         $post_status = in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'publish';
@@ -109,8 +126,6 @@ function import_remote_posts( array $args = [] ): array {
         if ( $options['map_users'] ) {
             $post_author = $remote_author ? find_local_user( $remote_author, $blog_id ) : 0;
         }
-
-        $post_name   = (string) ( $row['post_name'] ?? '' );
 
         if ( $post_name === '' ) {
             $post_name = sanitize_title( (string) $row['post_title'] ?: $remote_id );
@@ -402,8 +417,13 @@ function import_remote_posts( array $args = [] ): array {
  *
  */
 function find_local_post( int $remote_id, int $blog_id = 1 ): int {
+    $post_types = get_post_types( ['publicly_queryable' => true ] );
+
+    // Add support to another post_types
+    $post_types['guest-author'] = 'guest-author';
+
     $q = get_posts( [
-        'post_type'      => 'any',
+        'post_type'      => $post_types,
         'posts_per_page' => 1,
         'post_status'    => 'any',
         'meta_query'     => [

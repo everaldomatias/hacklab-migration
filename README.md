@@ -103,3 +103,9 @@ Importar single ➜ single junto com multisite já importados (evitar colisão d
 Importar por data de modificação
 
 `wp run-import q:post_modified_gmt=2024-01-01`
+
+Exemplos com last-modified:
+
+- Posts modificados após data/hora (GMT): `wp run-import 1 --q:post_modified_gmt="2024-01-01 00:00:00"`
+- Janela de modificação (entre datas): `wp run-import 1 --q:modified_after="2024-01-01" --q:modified_before="2024-02-01"`
+- Ordenar por modificação mais recente: `wp run-import 1 --q:post_type=post --q:orderby=post_modified_gmt --q:order=DESC --q:numberposts=50`

@@ -116,9 +116,18 @@ function cap_convert_post_to_guest_author( int $local_id, array $row, bool $is_u
         $source_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
     }
 
+    $source_id = (int) ( $row['ID'] ?? 0 );
+    $source_blog = (int) ( $row['blog_id'] ?? 1 );
+
+    if ( $source_id ) {
+        update_post_meta( $local_id, '_hacklab_migration_source_id', $source_id );
+    }
+
+    update_post_meta( $local_id, '_hacklab_migration_source_blog', $source_blog );
+
     // Preenche metas esperadas pelo CoAuthors Plus para guest-author.
-    if ( function_exists( '\\ensure_guest_author_post' ) ) {
-        \ensure_guest_author_post( $post, $source_meta );
+    if ( function_exists( __NAMESPACE__ . '\\ensure_guest_author_post' ) ) {
+        ensure_guest_author_post( $post, $source_meta );
     }
 
     $slug = sanitize_title( $post->post_name !== '' ? $post->post_name : ( $post->post_title !== '' ? $post->post_title : $post->ID ) );
