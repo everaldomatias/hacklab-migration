@@ -185,6 +185,14 @@ function import_remote_posts( array $args = [] ): array {
             $post_meta['_edit_last'] = (int) $local_user_id;
         }
 
+        if ( $post_meta ) {
+            foreach ( $post_meta as $mkey => $mval ) {
+                if ( is_array( $mval ) || is_object( $mval ) ) {
+                    $post_meta[ $mkey ] = maybe_serialize( $mval );
+                }
+            }
+        }
+
         $postarr['meta_input'] = array_merge( $post_meta, $postarr['meta_input'] );
 
         // Dry-run
