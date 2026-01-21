@@ -429,6 +429,7 @@ function find_local_post( int $remote_id, int $blog_id = 1 ): int {
 
     // Add support to another post_types
     $post_types['guest-author'] = 'guest-author';
+    $post_types['migration'] = 'migration';
 
     $q = get_posts( [
         'post_type'      => $post_types,
