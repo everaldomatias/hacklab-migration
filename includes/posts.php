@@ -102,21 +102,6 @@ function import_remote_posts( array $args = [] ): array {
         // Verifica se já foi importado
         $existing = find_local_post( $remote_id, $blog_id );
 
-        // Fallback de deduplicação para guest-authors por slug
-        if ( $existing <= 0 && $post_type === 'guest-author' && $post_name !== '' ) {
-            $dup = get_posts( [
-                'post_type'      => 'guest-author',
-                'name'           => $post_name,
-                'posts_per_page' => 1,
-                'post_status'    => 'any',
-                'fields'         => 'ids',
-                'no_found_rows'  => true,
-            ] );
-
-            if ( $dup ) {
-                $existing = (int) $dup[0];
-            }
-        }
         $is_update = $existing > 0;
 
         $post_status = in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'publish';

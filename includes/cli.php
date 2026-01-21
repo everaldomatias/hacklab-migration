@@ -857,6 +857,147 @@ class Commands {
         \WP_CLI::success( "Processo concluído." );
     }
 
+    /**
+     * Importa coautores (guest-author do CoAuthors Plus) do banco remoto.
+     *
+     * ## OPTIONS
+     *
+     * [<blog_id>]
+     * : ID do blog remoto em instalações multisite. Default: 1.
+     *
+     * [--include_ids=<ids>]
+     * : Lista de IDs remotos a incluir (separados por vírgula).
+     *
+     * [--exclude_ids=<ids>]
+     * : Lista de IDs remotos a excluir (separados por vírgula).
+     *
+     * [--limit=<n>]
+     * : Limite de registros buscados. Use 0 (padrão) para importar todos.
+     *
+     * [--offset=<n>]
+     * : Offset a ser aplicado junto com limit.
+     *
+     * [--dry_run]
+     * : Executa em modo de simulação, sem gravar alterações.
+     *
+     * [--force_base_prefix=<bool>]
+     * : Use ao consultar tabelas base (single site).
+     *
+     * ## EXAMPLES
+     *
+     *     wp import-coauthors
+     *     wp import-coauthors 3 --limit=200
+     *     wp import-coauthors --include_ids=10,12 --dry_run
+     *
+     * @param array $args         Argumentos posicionais ([<blog_id>]).
+     * @param array $command_args Argumentos nomeados.
+     */
+    static function cmd_import_coauthors( $args, $command_args ) {
+        $blog_id = isset( $args[0] ) ? (int) $args[0] : 1;
+
+        $parse_ids = static function ( $value ): array {
+            if ( $value === null || $value === '' ) {
+                return [];
+            }
+
+            $vals = is_array( $value ) ? $value : explode( ',', (string) $value );
+
+            return array_values(
+                array_filter(
+                    array_map( 'intval', array_map( 'trim', $vals ) ),
+                    static fn( $v ) => $v > 0
+                )
+            );
+        };
+
+        $include_ids = $parse_ids( $command_args['include_ids'] ?? '' );
+        $exclude_ids = $parse_ids( $command_args['exclude_ids'] ?? '' );
+        $limit       = isset( $command_args['limit'] ) ? max( 0, (int) $command_args['limit'] ) : null;
+        $offset      = isset( $command_args['offset'] ) ? max( 0, (int) $command_args['offset'] ) : 0;
+
+        $dry_run           = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
+        $force_base_prefix = \WP_CLI\Utils\get_flag_value( $command_args, 'force_base_prefix', false );
+
+        \WP_CLI::log( 'Iniciando importação de coautores (guest-author)...' );
+        if ( $dry_run ) {
+            \WP_CLI::log( 'Modo: DRY RUN (simulação, nenhuma alteração será gravada).' );
+        }
+
+        $result = import_remote_coauthors( [
+            'blog_id'           => $blog_id,
+            'include_ids'       => $include_ids,
+            'exclude_ids'       => $exclude_ids,
+            'limit'             => $limit,
+            'offset'            => $offset,
+            'dry_run'           => $dry_run,
+            'force_base_prefix' => $force_base_prefix,
+        ] );
+
+        $errors = (array) ( $result['errors'] ?? [] );
+
+        \WP_CLI::log( '' );
+        \WP_CLI::line( "====================== RESULTADO ======================" );
+        \WP_CLI::line( "Coautores encontrados: " . (int) ( $result['found_posts'] ?? 0 ) );
+        \WP_CLI::line( "Importados:            " . (int) ( $result['imported'] ?? 0 ) );
+        \WP_CLI::line( "Atualizados:           " . (int) ( $result['updated'] ?? 0 ) );
+        \WP_CLI::line( "Ignorados:             " . (int) ( $result['skipped'] ?? 0 ) );
+
+        if ( ! empty( $result['run_id'] ) ) {
+            \WP_CLI::line( "Run ID:                " . (int) $result['run_id'] );
+        }
+
+        \WP_CLI::line( "========================================================" );
+
+        $map = is_array( $result['map'] ?? null ) ? $result['map'] : [];
+        $map = array_filter( $map, static fn( $lid ) => (int) $lid > 0 );
+
+        if ( $map ) {
+            \WP_CLI::log( 'Coauthors criados/atualizados:' );
+
+            foreach ( $map as $remote_id => $local_id ) {
+                $lid   = (int) $local_id;
+                $title = '';
+
+                $post = get_post( $lid );
+                if ( $post instanceof \WP_Post ) {
+                    $title = (string) ( $post->post_title ?: $post->post_name );
+                    $meta_display = get_post_meta( $lid, 'cap-display_name', true );
+                    if ( $meta_display ) {
+                        $title = (string) $meta_display;
+                    }
+                }
+
+                \WP_CLI::log( sprintf(
+                    '  %d => %d%s',
+                    (int) $remote_id,
+                    $lid,
+                    $title !== '' ? " ({$title})" : ''
+                ) );
+            }
+
+            \WP_CLI::line( "--------------------------------------------------------" );
+        }
+
+        if ( $errors ) {
+            \WP_CLI::warning( "Erros durante a importação:" );
+
+            foreach ( $errors as $err ) {
+                $msg = (string) $err;
+                if ( $msg === '' ) {
+                    continue;
+                }
+
+                \WP_CLI::warning( "  - {$msg}" );
+            }
+        }
+
+        if ( $dry_run ) {
+            \WP_CLI::success( 'Simulação concluída. Nenhuma alteração foi gravada no banco local.' );
+        } else {
+            \WP_CLI::success( 'Importação de Coauthors concluída.' );
+        }
+    }
+
     // Helpers
     private static function csv_or_scalar( $value ) {
         if ( is_array( $value ) ) return $value;

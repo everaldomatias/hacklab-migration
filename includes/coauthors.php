@@ -139,3 +139,79 @@ function cap_convert_post_to_guest_author( int $local_id, array $row, bool $is_u
         'post_name'   => $slug,
     ] );
 }
+
+/**
+ * Importa coautores (guest-authors do CoAuthors Plus) do banco remoto.
+ *
+ * @param array $args {
+ *     @type int      $blog_id           ID do blog remoto. Default: 1.
+ *     @type int[]    $include_ids       IDs remotos a incluir.
+ *     @type int[]    $exclude_ids       IDs remotos a excluir.
+ *     @type int|null $limit             Limite de registros a buscar (null/0 para todos).
+ *     @type int      $offset            Offset usado junto com limit.
+ *     @type bool     $dry_run           Simula sem gravar.
+ *     @type bool     $force_base_prefix Usa as tabelas base em instalações single.
+ *     @type int      $run_id            ID do run de importação (gerado automaticamente se omitido).
+ * }
+ *
+ * @return array Resumo retornado por import_remote_posts().
+ */
+function import_remote_coauthors( array $args = [] ): array {
+    $defaults = [
+        'blog_id'           => 1,
+        'include_ids'       => [],
+        'exclude_ids'       => [],
+        'limit'             => null,
+        'offset'            => 0,
+        'dry_run'           => false,
+        'force_base_prefix' => false,
+        'run_id'            => 0,
+    ];
+
+    $o = wp_parse_args( $args, $defaults );
+
+    $blog_id = max( 1, (int) $o['blog_id'] );
+    $limit   = isset( $o['limit'] ) ? max( 0, (int) $o['limit'] ) : null;
+    $offset  = max( 0, (int) $o['offset'] );
+
+    $include_ids = array_values( array_filter( array_map( 'intval', (array) $o['include_ids'] ), static fn( $v ) => $v > 0 ) );
+    $exclude_ids = array_values( array_filter( array_map( 'intval', (array) $o['exclude_ids'] ), static fn( $v ) => $v > 0 ) );
+
+    $run_id = (int) $o['run_id'];
+    $dry_run = (bool) $o['dry_run'];
+
+    if ( $run_id <= 0 && ! $dry_run ) {
+        $run_id = next_import_run_id();
+    }
+
+    $fetch = [
+        'blog_id'           => $blog_id,
+        'post_type'         => 'guest-author',
+        'post_status'       => ['publish', 'pending', 'draft', 'private'],
+        'orderby'           => 'ID',
+        'order'             => 'ASC',
+        'include'           => $include_ids,
+        'exclude'           => $exclude_ids,
+        'limit'             => $limit,
+        'numberposts'       => $limit ?? 0,
+        'offset'            => $offset,
+        'force_base_prefix' => (bool) $o['force_base_prefix'],
+    ];
+
+    $summary = import_remote_posts( [
+        'fetch'            => $fetch,
+        'media'            => false,
+        'assign_terms'     => false,
+        'map_users'        => false,
+        'dry_run'          => $dry_run,
+        'target_post_type' => 'guest-author',
+        'write_mode'       => 'upsert',
+        'fn_pos'           => __NAMESPACE__ . '\\cap_convert_post_to_guest_author',
+        'force_base_prefix'=> (bool) $o['force_base_prefix'],
+        'run_id'           => $run_id,
+    ] );
+
+    $summary['run_id'] = $run_id;
+
+    return $summary;
+}
