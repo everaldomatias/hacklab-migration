@@ -252,12 +252,10 @@ function import_remote_posts( array $args = [] ): array {
             update_post_meta( $local_id, '_hacklab_migration_source_post_type', $remote_type );
         }
 
-        $remote_terms = $row['remote_terms'] ?? [];
-        $local_terms = $row['local_terms'] ?? [];
+        $remote_terms = is_array( $row['remote_terms'] ?? null ) ? $row['remote_terms'] : [];
+        $local_terms  = is_array( $row['local_terms'] ?? null ) ? $row['local_terms'] : [];
 
-        if ( ! $options['assign_terms'] && $remote_terms ) {
-            update_post_meta( $local_id, '_hacklab_migration_remote_terms', $remote_terms );
-        }
+        update_post_meta( $local_id, '_hacklab_migration_remote_terms', $remote_terms );
 
         if ( $options['assign_terms'] ) {
             $row_terms = array_merge( $remote_terms, $local_terms );
