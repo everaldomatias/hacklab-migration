@@ -768,6 +768,14 @@ class Commands {
             'fn_pos'      => '',
         ] );
 
+        $blog_id = isset( $args[0] ) ? (int) $args[0] : null;
+        if ( ! $blog_id && ! empty( $options['blog_id'] ) ) {
+            $blog_id = (int) $options['blog_id'];
+        }
+        if ( ! $blog_id ) {
+            $blog_id = 1;
+        }
+
         $taxonomies = [];
         if ( ! empty( $options['taxonomies'] ) ) {
             $taxonomies = array_map( 'sanitize_key', explode( ',', $options['taxonomies'] ) );
@@ -794,20 +802,25 @@ class Commands {
             \WP_CLI::error( "A função fn_pos informada não é callable: {$fn_pos}" );
         }
 
+        $dry_run           = \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false );
+        $force_base_prefix = \WP_CLI\Utils\get_flag_value( $options, 'force_base_prefix', false );
+
         $args_import = [
             'blog_id'     => $options['blog_id'] ? (int) $options['blog_id'] : null,
             'taxonomies'  => $taxonomies,
             'include_ids' => $include_ids,
             'exclude_ids' => $exclude_ids,
             'chunk'       => (int) $options['chunk'],
-            'dry_run'     => \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false ),
+            'dry_run'     => $dry_run,
             'fn_pre'      => $fn_pre,
             'fn_pos'      => $fn_pos,
-            'force_base_prefix' => \WP_CLI\Utils\get_flag_value( $options, 'force_base_prefix', false ),
-            'run_id'      => ( ! \WP_CLI\Utils\get_flag_value( $options, 'dry_run', false ) ) ? next_import_run_id() : 0,
+            'force_base_prefix' => $force_base_prefix,
+            'run_id'      => $dry_run ? 0 : next_import_run_id(),
         ];
 
-        \WP_CLI::log( "Iniciando importação de termos..." );
+        $args_import['blog_id'] = $blog_id;
+
+        \WP_CLI::log( "Iniciando importação de termos (blog {$blog_id})..." );
         $result = import_remote_terms( $args_import );
 
         $errors_total = 0;
@@ -995,6 +1008,193 @@ class Commands {
             \WP_CLI::success( 'Simulação concluída. Nenhuma alteração foi gravada no banco local.' );
         } else {
             \WP_CLI::success( 'Importação de Coauthors concluída.' );
+        }
+    }
+
+    /**
+     * Reatacha thumbnails de posts importados procurando anexos locais pelo ID remoto.
+     *
+     * Uso:
+     *   wp reattach-attachments <blog_id> --q:post_type=post
+     *
+     * O comando busca posts cujo metadado `_hacklab_migration_source_blog` seja
+     * igual a <blog_id> e tenta resolver o `_thumbnail_id` remoto para um
+     * attachment local. Se já existir um attachment com os metadados internos
+     * `_hacklab_migration_source_id` e `_hacklab_migration_source_blog`, ele é
+     * usado diretamente. Caso contrário, a rotina busca os dados do anexo no
+     * banco remoto e o registra localmente antes de setar a thumbnail.
+     *
+     * Flags:
+     *   --q:post_type=<tipo>    Post type a filtrar (aceita lista separada por vírgula).
+     *   --dry_run               Apenas relata o que faria, sem gravar.
+     *   --force_base_prefix     Usar tabelas base do multisite remoto (repasse para fetch).
+     */
+    static function cmd_reattach_attachments( $args, $command_args ) {
+        if ( empty( $args[0] ) ) {
+            \WP_CLI::error( 'Informe o <blog_id>. Ex: wp reattach-attachments 1 --q:post_type=post' );
+        }
+
+        $blog_id = (int) $args[0];
+        if ( $blog_id <= 0 ) {
+            \WP_CLI::error( '<blog_id> deve ser um inteiro positivo.' );
+        }
+
+        $post_type = 'any';
+
+        foreach ( $command_args as $name => $value ) {
+            if ( strpos( $name, 'q:' ) === 0 ) {
+                $key = substr( $name, 2 );
+                if ( $key === 'post_type' ) {
+                    $post_type = self::csv_or_scalar( $value );
+                }
+            }
+        }
+
+        $dry_run           = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
+        $force_base_prefix = \WP_CLI\Utils\get_flag_value( $command_args, 'force_base_prefix', false );
+
+        $query = [
+            'post_type'  => $post_type,
+            'post_status'=> 'any',
+            'meta_query' => [
+                [
+                    'key'     => '_hacklab_migration_source_blog',
+                    'value'   => $blog_id,
+                    'compare' => '=',
+                ],
+            ],
+            'posts_per_page'        => -1,
+            'fields'                => 'ids',
+            'no_found_rows'         => true,
+            'update_post_meta_cache'=> false,
+            'update_post_term_cache'=> false,
+        ];
+
+        $post_ids = get_posts( $query );
+
+        if ( ! $post_ids ) {
+            \WP_CLI::success( 'Nenhum post encontrado para reatachar thumbnails.' );
+            return;
+        }
+
+        $run_id = $dry_run ? 0 : next_import_run_id();
+
+        $stats = [
+            'total'      => count( $post_ids ),
+            'attached'   => 0,
+            'registered' => 0,
+            'skipped'    => 0,
+            'missing'    => 0,
+        ];
+
+        \WP_CLI::log( sprintf( 'Processando %d posts...', $stats['total'] ) );
+
+        foreach ( $post_ids as $post_id ) {
+            $remote_thumb_id = (int) get_post_meta( $post_id, '_thumbnail_id', true );
+
+            if ( $remote_thumb_id <= 0 ) {
+                $source_meta = get_post_meta( $post_id, '_hacklab_migration_source_meta', true );
+                if ( is_array( $source_meta ) && ! empty( $source_meta['_thumbnail_id'] ) ) {
+                    $candidate = $source_meta['_thumbnail_id'];
+                    if ( is_array( $candidate ) ) {
+                        $candidate = reset( $candidate );
+                    }
+                    $remote_thumb_id = (int) $candidate;
+                }
+            }
+
+            if ( $remote_thumb_id <= 0 ) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            $attachment_id = 0;
+
+            $existing = get_post( $remote_thumb_id );
+            if ( $existing instanceof \WP_Post && $existing->post_type === 'attachment' ) {
+                $attachment_id = (int) $existing->ID;
+            }
+
+            if ( $attachment_id <= 0 ) {
+                $found = get_posts( [
+                    'post_type'      => 'attachment',
+                    'post_status'    => 'any',
+                    'posts_per_page' => 1,
+                    'meta_query'     => [
+                        [ 'key' => '_hacklab_migration_source_id',   'value' => $remote_thumb_id, 'compare' => '=' ],
+                        [ 'key' => '_hacklab_migration_source_blog', 'value' => $blog_id,         'compare' => '=' ],
+                    ],
+                    'fields'                => 'ids',
+                    'no_found_rows'         => true,
+                    'update_post_meta_cache'=> false,
+                    'update_post_term_cache'=> false,
+                ] );
+
+                if ( $found ) {
+                    $attachment_id = (int) $found[0];
+                }
+            }
+
+            if ( $attachment_id > 0 ) {
+                if ( ! $dry_run ) {
+                    set_post_thumbnail( $post_id, $attachment_id );
+                }
+                $stats['attached']++;
+                continue;
+            }
+
+            $info = fetch_remote_attachments_by_ids( [ $remote_thumb_id ], $blog_id, $force_base_prefix );
+
+            if ( empty( $info[ $remote_thumb_id ] ) ) {
+                $stats['missing']++;
+                \WP_CLI::warning( sprintf(
+                    'Attachment remoto %d não encontrado para o post %d.',
+                    $remote_thumb_id,
+                    $post_id
+                ) );
+                continue;
+            }
+
+            if ( $dry_run ) {
+                $stats['registered']++;
+                continue;
+            }
+
+            $att_id = register_local_attachments(
+                $info[ $remote_thumb_id ]['post'] ?? [],
+                $info[ $remote_thumb_id ]['meta'] ?? [],
+                $blog_id,
+                $run_id,
+                $blog_id,
+                $force_base_prefix
+            );
+
+            if ( $att_id > 0 ) {
+                set_post_thumbnail( $post_id, $att_id );
+                $stats['registered']++;
+            } else {
+                $stats['missing']++;
+                \WP_CLI::warning( sprintf(
+                    'Não foi possível registrar o attachment remoto %d para o post %d.',
+                    $remote_thumb_id,
+                    $post_id
+                ) );
+            }
+        }
+
+        \WP_CLI::line( '' );
+        \WP_CLI::line( '==================== REATTACH SUMMARY ====================' );
+        \WP_CLI::line( sprintf( 'Posts processados:        %d', $stats['total'] ) );
+        \WP_CLI::line( sprintf( 'Thumbnails reatachadas:   %d', $stats['attached'] ) );
+        \WP_CLI::line( sprintf( 'Attachments registrados:  %d', $stats['registered'] ) );
+        \WP_CLI::line( sprintf( 'Ignorados (sem thumb):    %d', $stats['skipped'] ) );
+        \WP_CLI::line( sprintf( 'Falhas/missing:           %d', $stats['missing'] ) );
+        \WP_CLI::line( '=========================================================' );
+
+        if ( $dry_run ) {
+            \WP_CLI::success( 'Dry-run concluído (nenhuma alteração gravada).' );
+        } else {
+            \WP_CLI::success( 'Reattach concluído.' );
         }
     }
 

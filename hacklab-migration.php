@@ -3,7 +3,7 @@
  * Plugin Name:       #Hacklab Migration
  * Plugin URI:        https://github.com/hacklabr
  * Description:       Plugin to migrate content WordPress.
- * Version:           0.0.16
+ * Version:           0.0.17
  * Requires at least: 5.2
  * Requires PHP:      7.4
  * Author:            Hacklab Team
@@ -68,7 +68,7 @@ if ( ! check_requirements() ) {
  * Constantes do plugin
  * -------------------------------------------------------------------------
  */
-define( 'HACKLAB_MIGRATION_VERSION', '0.0.15' );
+define( 'HACKLAB_MIGRATION_VERSION', '0.0.17' );
 define( 'HACKLAB_MIGRATION_FILE', __FILE__ );
 define( 'HACKLAB_MIGRATION_DIR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'HACKLAB_MIGRATION_DIR_URL', plugin_dir_url( __FILE__ ) );
