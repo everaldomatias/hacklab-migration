@@ -1163,3 +1163,13 @@ function next_import_run_id(): int {
     $ok = update_option( 'hm_import_run_last', $next, false );
     return $ok ? $next : 0;
 }
+
+function get_supported_post_types() {
+    $post_types = get_post_types( ['publicly_queryable' => true ] );
+
+    // Add support to another post_types
+    $post_types['guest-author'] = 'guest-author';
+    $post_types['migration'] = 'migration';
+
+    return array_values( $post_types );
+}
