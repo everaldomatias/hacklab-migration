@@ -315,16 +315,54 @@ function add_term_to_post( int $post_id, string $taxonomy, string $term_value ):
  * @param array    $source_meta Metadados de origem (para tentar extrair e-mail).
  */
 function ensure_guest_author_post( \WP_Post $post, array $source_meta = [] ): void {
-    $title = (string) $post->post_title;
-    $slug  = (string) $post->post_name;
+    $pick_meta = static function ( array $keys ) use ( $source_meta ): string {
+        foreach ( $keys as $k ) {
+            if ( empty( $source_meta[ $k ] ) ) {
+                continue;
+            }
+            $candidate = is_array( $source_meta[ $k ] ) ? reset( $source_meta[ $k ] ) : $source_meta[ $k ];
+            $candidate = trim( (string) $candidate );
+            if ( $candidate !== '' ) {
+                return $candidate;
+            }
+        }
+        return '';
+    };
+
+    $first_name = $pick_meta( ['cap-first_name', 'first_name'] );
+    $last_name  = $pick_meta( ['cap-last_name', 'last_name'] );
+
+    $display_sources = [
+        $pick_meta( ['cap-display_name', 'display_name', 'name'] ),
+        trim( implode( ' ', array_filter( [ $first_name, $last_name ], static fn( $v ) => $v !== '' ) ) ),
+        $post->post_title,
+        $post->post_name,
+    ];
+
+    $display = '';
+    foreach ( $display_sources as $candidate ) {
+        $candidate = is_array( $candidate ) ? reset( $candidate ) : $candidate;
+        $candidate = trim( (string) $candidate );
+        if ( $candidate !== '' ) {
+            $display = $candidate;
+            break;
+        }
+    }
+
+    if ( $display === '' ) {
+        $display = (string) $post->ID;
+    }
+
+    $slug_from_post = (string) $post->post_name;
+    $slug = $slug_from_post !== '' ? $slug_from_post : sanitize_title( $display );
+
     if ( $slug === '' ) {
-        $slug = sanitize_title( $title !== '' ? $title : $post->ID );
+        $slug = sanitize_title( $post->ID );
     }
 
     $user_login = sanitize_user( $slug, true ) ?: sanitize_key( $slug );
-    $display    = $title !== '' ? $title : $slug;
 
-    $email_keys = ['user_email', 'email'];
+    $email_keys = ['cap-user_email', 'user_email', 'email'];
     $email = '';
     foreach ( $email_keys as $k ) {
         if ( ! empty( $source_meta[ $k ] ) ) {
@@ -342,8 +380,33 @@ function ensure_guest_author_post( \WP_Post $post, array $source_meta = [] ): vo
     if ( $email !== '' ) {
         update_post_meta( $post->ID, 'cap-user_email', $email );
     }
+    if ( $first_name !== '' ) {
+        update_post_meta( $post->ID, 'cap-first_name', $first_name );
+    }
+    if ( $last_name !== '' ) {
+        update_post_meta( $post->ID, 'cap-last_name', $last_name );
+    }
 
-    if ( $post->post_status !== 'publish' ) {
-        $post->post_status = 'publish';
+    $description = $pick_meta( ['cap-description', 'description', 'bio', 'user_description'] );
+    if ( $description !== '' ) {
+        update_post_meta( $post->ID, 'cap-description', wp_kses_post( $description ) );
+    }
+
+    $website = $pick_meta( ['cap-website', 'website', 'user_url'] );
+    if ( $website !== '' && filter_var( $website, FILTER_VALIDATE_URL ) ) {
+        update_post_meta( $post->ID, 'cap-website', esc_url_raw( $website ) );
+    }
+
+    $needs_update = $post->post_title !== $display
+        || $post->post_name !== $slug
+        || $post->post_status !== 'publish';
+
+    if ( $needs_update ) {
+        wp_update_post( [
+            'ID'          => $post->ID,
+            'post_title'  => $display,
+            'post_name'   => $slug,
+            'post_status' => 'publish',
+        ] );
     }
 }

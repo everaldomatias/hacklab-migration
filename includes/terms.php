@@ -239,6 +239,26 @@ function import_remote_terms( array $args ) : array {
 
                 $term_meta = $meta_by_remote[ $rid ] ?? [];
 
+                // CoAuthors Plus (taxonomia author) mantém display_name em meta; evita cair no slug.
+                if ( $taxonomy === 'author' ) {
+                    foreach ( $term_meta as $meta_entry ) {
+                        $mkey = $meta_entry['meta_key'] ?? '';
+                        if ( $mkey === 'cap-display_name' || $mkey === 'display_name' ) {
+                            $display = maybe_unserialize( $meta_entry['meta_value'] ?? '' );
+                            if ( is_scalar( $display ) ) {
+                                $display = wp_strip_all_tags( (string) $display );
+                            } else {
+                                $display = '';
+                            }
+
+                            if ( $display !== '' ) {
+                                $name = $display;
+                            }
+                            break;
+                        }
+                    }
+                }
+
                 $payload = [
                     'remote_term_id' => $rid,
                     'taxonomy'       => $taxonomy,
