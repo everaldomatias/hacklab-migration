@@ -570,7 +570,7 @@ function render_local_lookup_page() {
             );
         } else {
             $results = get_posts( [
-                'post_type'              => 'any',
+                'post_type'              => get_supported_post_types(),
                 'post_status'            => 'any',
                 'posts_per_page'         => 50,
                 'fields'                 => 'all',
@@ -670,7 +670,8 @@ function render_local_lookup_page() {
                         <th><?php esc_html_e( 'Post type', 'hacklabr' ); ?></th>
                         <th><?php esc_html_e( 'Status', 'hacklabr' ); ?></th>
                         <th><?php esc_html_e( 'Modificado (GMT)', 'hacklabr' ); ?></th>
-                        <th><?php esc_html_e( 'Permalink', 'hacklabr' ); ?></th>
+                        <th><?php esc_html_e( 'Editar', 'hacklabr' ); ?></th>
+                        <th><?php esc_html_e( 'Link', 'hacklabr' ); ?></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -681,6 +682,12 @@ function render_local_lookup_page() {
                             <td><?php echo esc_html( get_post_type( $p ) ); ?></td>
                             <td><?php echo esc_html( get_post_status( $p ) ); ?></td>
                             <td><?php echo esc_html( (string) get_post_field( 'post_modified_gmt', $p ) ); ?></td>
+                            <td>
+                                <?php $edit_link = get_edit_post_link( $p->ID ); ?>
+                                <?php if ( $edit_link ) : ?>
+                                    <a href="<?php echo esc_url( $edit_link ); ?>" target="_blank" rel="noreferrer noopener"><?php esc_html_e( 'Editar', 'hacklabr' ); ?></a>
+                                <?php endif; ?>
+                            </td>
                             <td>
                                 <?php $link = get_permalink( $p ); ?>
                                 <?php if ( $link ) : ?>
