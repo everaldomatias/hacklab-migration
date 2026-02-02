@@ -50,6 +50,114 @@ function map_remote_author_to_local( \WP_Post $post ): void {
 }
 
 /**
+ * Atribui coautor local (WP user ou guest-author) com base no autor remoto salvo nas metas.
+ *
+ * Regras:
+ * - Tenta resolver o autor remoto para usuário local (find_local_user ou import_remote_user).
+ * - Se não existir usuário e CoAuthors Plus estiver ativo, procura guest-author com metas de origem;
+ *   se não achar, cria guest-author e atribui.
+ *
+ * Pode ser usado com hacklab-dev-utils:
+ *   wp modify-posts --fn:\\HacklabMigration\\map_remote_author_to_coauthor ...
+ *
+ * @param \WP_Post $post
+ */
+function map_remote_author_to_coauthor( \WP_Post $post ): void {
+    // Se CoAuthors não está ativo, nada a fazer.
+    if ( ! cap_instance() ) {
+        return;
+    }
+
+    $remote_author = (int) get_post_meta( $post->ID, '_hacklab_migration_remote_author', true );
+
+    if ( $remote_author <= 0 ) {
+        $source_meta = get_post_meta( $post->ID, '_hacklab_migration_source_meta', true );
+        if ( is_array( $source_meta ) ) {
+            $remote_author = (int) ( $source_meta['post_author'] ?? 0 );
+        }
+    }
+
+    if ( $remote_author <= 0 ) {
+        return;
+    }
+
+    $blog_id = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
+    if ( $blog_id <= 0 ) {
+        $blog_id = 1;
+    }
+
+    $authors = [];
+
+    // 1) Tenta usuário local.
+    $local_user = find_local_user( $remote_author, $blog_id );
+
+    if ( $local_user <= 0 ) {
+        $local_user = import_remote_user( $remote_author, $blog_id, false );
+    }
+
+    if ( $local_user > 0 ) {
+        $user = get_user_by( 'id', $local_user );
+        if ( $user instanceof \WP_User ) {
+            $authors[] = [
+                'slug'  => (string) $user->user_nicename,
+                'login' => (string) $user->user_login,
+                'email' => (string) $user->user_email,
+                'name'  => (string) $user->display_name,
+            ];
+        }
+    } else {
+        // 2) Busca guest-author existente pelas metas de origem.
+        $existing_ga = get_posts( [
+            'post_type'      => 'guest-author',
+            'posts_per_page' => 1,
+            'post_status'    => 'any',
+            'meta_query'     => [
+                [ 'key' => '_hacklab_migration_source_id',   'value' => $remote_author, 'compare' => '=' ],
+                [ 'key' => '_hacklab_migration_source_blog', 'value' => $blog_id,       'compare' => '=' ],
+            ],
+            'fields'                => 'ids',
+            'no_found_rows'         => true,
+            'update_post_meta_cache'=> false,
+            'update_post_term_cache'=> false,
+        ] );
+
+        $ga_id = $existing_ga ? (int) $existing_ga[0] : 0;
+
+        if ( $ga_id <= 0 ) {
+            // Cria guest-author mínimo.
+            $slug    = 'remote-author-' . $blog_id . '-' . $remote_author;
+            $display = 'Autor ' . $remote_author;
+
+            $login = cap_create_guest_author( $slug, $display );
+            if ( $login !== '' ) {
+                $ga_post = get_page_by_path( $slug, OBJECT, 'guest-author' );
+                $ga_id   = $ga_post instanceof \WP_Post ? (int) $ga_post->ID : 0;
+                if ( $ga_id > 0 ) {
+                    update_post_meta( $ga_id, '_hacklab_migration_source_id', $remote_author );
+                    update_post_meta( $ga_id, '_hacklab_migration_source_blog', $blog_id );
+                }
+            }
+        }
+
+        if ( $ga_id > 0 ) {
+            $ga_post = get_post( $ga_id );
+            $authors[] = [
+                'slug'  => $ga_post instanceof \WP_Post ? (string) $ga_post->post_name : '',
+                'login' => $ga_post instanceof \WP_Post ? (string) $ga_post->post_name : '',
+                'email' => '',
+                'name'  => $ga_post instanceof \WP_Post ? (string) $ga_post->post_title : '',
+            ];
+        }
+    }
+
+    if ( ! $authors ) {
+        return;
+    }
+
+    cap_assign_coauthors_to_post( $post->ID, [ 'author' => $authors ] );
+}
+
+/**
  * Sincroniza coautores usando dados do meta de origem e CoAuthors Plus.
  *
  * Uso (com hacklab-dev-utils):
