@@ -1026,8 +1026,10 @@ class Commands {
      *
      * Flags:
      *   --q:post_type=<tipo>    Post type a filtrar (aceita lista separada por vírgula).
+     *   --q:include=<id>,<id>   IDs dos posts (remoto) a retornar.
      *   --dry_run               Apenas relata o que faria, sem gravar.
      *   --force_base_prefix     Usar tabelas base do multisite remoto (repasse para fetch).
+     *
      */
     static function cmd_reattach_attachments( $args, $command_args ) {
         if ( empty( $args[0] ) ) {
@@ -1039,7 +1041,8 @@ class Commands {
             \WP_CLI::error( '<blog_id> deve ser um inteiro positivo.' );
         }
 
-        $post_type = 'any';
+        $post_type   = 'any';
+        $include_ids = [];
 
         foreach ( $command_args as $name => $value ) {
             if ( strpos( $name, 'q:' ) === 0 ) {
@@ -1047,13 +1050,17 @@ class Commands {
                 if ( $key === 'post_type' ) {
                     $post_type = self::csv_or_scalar( $value );
                 }
+
+                if ( $key === 'include' ) {
+                    $include_ids = self::csv_ints( $value );
+                }
             }
         }
 
         $dry_run           = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
         $force_base_prefix = \WP_CLI\Utils\get_flag_value( $command_args, 'force_base_prefix', false );
 
-        $query = [
+        $query_args = [
             'post_type'  => $post_type,
             'post_status'=> 'any',
             'meta_query' => [
@@ -1070,7 +1077,12 @@ class Commands {
             'update_post_term_cache'=> false,
         ];
 
-        $post_ids = get_posts( $query );
+        if ( $include_ids ) {
+            $query_args['post__in'] = $include_ids;
+            $query_args['orderby']  = 'post__in';
+        }
+
+        $post_ids = get_posts( $query_args );
 
         if ( ! $post_ids ) {
             \WP_CLI::success( 'Nenhum post encontrado para reatachar thumbnails.' );
@@ -1085,6 +1097,9 @@ class Commands {
             'registered' => 0,
             'skipped'    => 0,
             'missing'    => 0,
+            'rew_content'=> 0,
+            'rew_meta'   => 0,
+            'rew_attach' => 0,
         ];
 
         \WP_CLI::log( sprintf( 'Processando %d posts...', $stats['total'] ) );
@@ -1180,6 +1195,21 @@ class Commands {
                     $post_id
                 ) );
             }
+
+            // Reescreve URLs no conteúdo/metas se uploads_base foi fornecido.
+            if ( ! empty( $options['uploads_base'] ) ) {
+                $rewrite = rewrite_post_media_urls(
+                    $post_id,
+                    (string) $options['uploads_base'],
+                    $blog_id,
+                    (bool) $force_base_prefix,
+                    $dry_run
+                );
+
+                $stats['rew_content'] += (int) ( $rewrite['content'] ?? 0 );
+                $stats['rew_meta']    += (int) ( $rewrite['meta'] ?? 0 );
+                $stats['rew_attach']  += (int) ( $rewrite['attachment'] ?? 0 );
+            }
         }
 
         \WP_CLI::line( '' );
@@ -1189,6 +1219,11 @@ class Commands {
         \WP_CLI::line( sprintf( 'Attachments registrados:  %d', $stats['registered'] ) );
         \WP_CLI::line( sprintf( 'Ignorados (sem thumb):    %d', $stats['skipped'] ) );
         \WP_CLI::line( sprintf( 'Falhas/missing:           %d', $stats['missing'] ) );
+        if ( ! empty( $options['uploads_base'] ) ) {
+            \WP_CLI::line( sprintf( 'Conteúdos reescritos:     %d', $stats['rew_content'] ) );
+            \WP_CLI::line( sprintf( 'Metas reescritas:         %d', $stats['rew_meta'] ) );
+            \WP_CLI::line( sprintf( 'Metas de attachment:      %d', $stats['rew_attach'] ) );
+        }
         \WP_CLI::line( '=========================================================' );
 
         if ( $dry_run ) {
