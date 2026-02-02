@@ -862,3 +862,106 @@ function rewrite_meta_attachments_value( $value, array $att_map, array $url_map,
 
     return $value;
 }
+
+/**
+ * Reescreve URLs de mídia no conteúdo e metadados de um post (ou attachment).
+ *
+ * - Substitui URLs antigas de uploads por URLs locais usando `uploads_base`.
+ * - Remove prefixo de multisite `/sites/<id>/` e aplica prefixo de blog no nome
+ *   do arquivo quando `remote_blog_id > 1`.
+ * - Para attachments, normaliza `_wp_attached_file` e `_wp_attachment_metadata`.
+ *
+ * @param int    $post_id            ID do post/attachment.
+ * @param string $uploads_base       Base de uploads remota (ex.: https://site-antigo/wp-content/uploads).
+ * @param int    $remote_blog_id     Blog ID de origem (para prefixar nomes).
+ * @param bool   $strip_sites_prefix Remove `/sites/<id>/` e prefixa filename (single target).
+ * @param bool   $dry_run            Quando true, não grava alterações.
+ *
+ * @return array{content:int,meta:int,attachment:int,errors:array}
+ */
+function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remote_blog_id = 1, bool $strip_sites_prefix = false, bool $dry_run = false ): array {
+    $post = get_post( $post_id );
+    if ( ! $post instanceof \WP_Post ) {
+        return [ 'content' => 0, 'meta' => 0, 'attachment' => 0, 'errors' => [ 'Post inválido' ] ];
+    }
+
+    $uploads_base = rtrim( $uploads_base );
+    if ( $uploads_base === '' ) {
+        return [ 'content' => 0, 'meta' => 0, 'attachment' => 0, 'errors' => [ 'uploads_base vazio' ] ];
+    }
+
+    $uploads  = wp_upload_dir();
+    $new_base = rtrim( $uploads['baseurl'], '/' );
+    $url_map  = build_uploads_url_map( $uploads_base, $new_base, $remote_blog_id );
+
+    $summary = [ 'content' => 0, 'meta' => 0, 'attachment' => 0, 'errors' => [] ];
+
+    // Conteúdo
+    $old_content = (string) $post->post_content;
+    if ( $old_content !== '' ) {
+        $new_content = replace_content_urls( $old_content, $uploads_base, $new_base, $remote_blog_id, $strip_sites_prefix );
+        if ( $new_content !== $old_content ) {
+            if ( ! $dry_run ) {
+                wp_update_post( [
+                    'ID'           => $post_id,
+                    'post_content' => $new_content,
+                ] );
+            }
+            $summary['content']++;
+        }
+    }
+
+    // Meta
+    $meta_keys = get_post_custom_keys( $post_id ) ?: [];
+    foreach ( $meta_keys as $meta_key ) {
+        if ( strpos( $meta_key, '_hacklab_migration_' ) === 0 ) {
+            continue;
+        }
+
+        $values = get_post_meta( $post_id, $meta_key, false );
+        if ( ! $values ) {
+            continue;
+        }
+
+        foreach ( $values as $old_raw ) {
+            $old_un = maybe_unserialize( $old_raw );
+            $new    = rewrite_meta_attachments_value( $old_un, [], $url_map, $remote_blog_id, $strip_sites_prefix );
+
+            if ( $new === $old_un ) {
+                continue;
+            }
+
+            if ( ! $dry_run ) {
+                update_post_meta( $post_id, $meta_key, $new, $old_raw );
+            }
+
+            $summary['meta']++;
+        }
+    }
+
+    // Attachment metadata
+    if ( $post->post_type === 'attachment' ) {
+        $attached_file = (string) get_post_meta( $post_id, '_wp_attached_file', true );
+        $new_file      = normalize_attached_file_for_single( $attached_file, $remote_blog_id, $strip_sites_prefix );
+
+        if ( $attached_file !== '' && $new_file !== $attached_file ) {
+            if ( ! $dry_run ) {
+                update_post_meta( $post_id, '_wp_attached_file', $new_file );
+            }
+            $summary['attachment']++;
+        }
+
+        $meta = get_post_meta( $post_id, '_wp_attachment_metadata', true );
+        if ( is_array( $meta ) && $meta ) {
+            $new_meta = normalize_attachment_metadata_for_single( $meta, $remote_blog_id, $strip_sites_prefix );
+            if ( $new_meta !== $meta ) {
+                if ( ! $dry_run ) {
+                    update_post_meta( $post_id, '_wp_attachment_metadata', $new_meta );
+                }
+                $summary['attachment']++;
+            }
+        }
+    }
+
+    return $summary;
+}
