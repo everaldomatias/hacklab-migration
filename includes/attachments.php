@@ -890,6 +890,13 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
         return [ 'content' => 0, 'meta' => 0, 'attachment' => 0, 'errors' => [ 'uploads_base vazio' ] ];
     }
 
+    if ( $remote_blog_id <= 0 ) {
+        $remote_blog_id = (int) get_post_meta( $post_id, '_hacklab_migration_source_blog', true );
+        if ( $remote_blog_id <= 0 ) {
+            $remote_blog_id = 1;
+        }
+    }
+
     $uploads  = wp_upload_dir();
     $new_base = rtrim( $uploads['baseurl'], '/' );
     $url_map  = build_uploads_url_map( $uploads_base, $new_base, $remote_blog_id );

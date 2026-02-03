@@ -1054,11 +1054,28 @@ class Commands {
                 if ( $key === 'include' ) {
                     $include_ids = self::csv_ints( $value );
                 }
+
+                if ( $key === 'uploads_base' ) {
+                    if ( is_string( $value ) && $value !== '' ) {
+                        $options['uploads_base'] = $value;
+                    }
+                }
+            }
+
+            if ( in_array( $name, [ 'uploads_base', 'old-uploads-base' ], true ) && is_string( $value ) && $value !== '' ) {
+                $options['uploads_base'] = $value;
             }
         }
 
         $dry_run           = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
         $force_base_prefix = \WP_CLI\Utils\get_flag_value( $command_args, 'force_base_prefix', false );
+
+        if ( empty( $options['uploads_base'] ) ) {
+            $creds = get_credentials();
+            if ( ! empty( $creds['uploads_base'] ) ) {
+                $options['uploads_base'] = (string) $creds['uploads_base'];
+            }
+        }
 
         $query_args = [
             'post_type'  => $post_type,
@@ -1155,52 +1172,54 @@ class Commands {
                     set_post_thumbnail( $post_id, $attachment_id );
                 }
                 $stats['attached']++;
-                continue;
-            }
-
-            $info = fetch_remote_attachments_by_ids( [ $remote_thumb_id ], $blog_id, $force_base_prefix );
-
-            if ( empty( $info[ $remote_thumb_id ] ) ) {
-                $stats['missing']++;
-                \WP_CLI::warning( sprintf(
-                    'Attachment remoto %d não encontrado para o post %d.',
-                    $remote_thumb_id,
-                    $post_id
-                ) );
-                continue;
-            }
-
-            if ( $dry_run ) {
-                $stats['registered']++;
-                continue;
-            }
-
-            $att_id = register_local_attachments(
-                $info[ $remote_thumb_id ]['post'] ?? [],
-                $info[ $remote_thumb_id ]['meta'] ?? [],
-                $blog_id,
-                $run_id,
-                $blog_id,
-                $force_base_prefix
-            );
-
-            if ( $att_id > 0 ) {
-                set_post_thumbnail( $post_id, $att_id );
-                $stats['registered']++;
             } else {
-                $stats['missing']++;
-                \WP_CLI::warning( sprintf(
-                    'Não foi possível registrar o attachment remoto %d para o post %d.',
-                    $remote_thumb_id,
-                    $post_id
-                ) );
+                $info = fetch_remote_attachments_by_ids( [ $remote_thumb_id ], $blog_id, $force_base_prefix );
+
+                if ( empty( $info[ $remote_thumb_id ] ) ) {
+                    $stats['missing']++;
+                    \WP_CLI::warning( sprintf(
+                        'Attachment remoto %d não encontrado para o post %d.',
+                        $remote_thumb_id,
+                        $post_id
+                    ) );
+                } else {
+                    if ( $dry_run ) {
+                        $stats['registered']++;
+                    } else {
+                        $att_id = register_local_attachments(
+                            $info[ $remote_thumb_id ]['post'] ?? [],
+                            $info[ $remote_thumb_id ]['meta'] ?? [],
+                            $blog_id,
+                            $run_id,
+                            $blog_id,
+                            $force_base_prefix
+                        );
+
+                        if ( $att_id > 0 ) {
+                            set_post_thumbnail( $post_id, $att_id );
+                            $stats['registered']++;
+                        } else {
+                            $stats['missing']++;
+                            \WP_CLI::warning( sprintf(
+                                'Não foi possível registrar o attachment remoto %d para o post %d.',
+                                $remote_thumb_id,
+                                $post_id
+                            ) );
+                        }
+                    }
+                }
             }
 
-            // Reescreve URLs no conteúdo/metas se uploads_base foi fornecido.
-            if ( ! empty( $options['uploads_base'] ) ) {
+            // Reescreve URLs no conteúdo/metas se uploads_base foi fornecido (ou salvo no post).
+            $post_uploads_base = (string) ( $options['uploads_base'] ?? '' );
+            if ( $post_uploads_base === '' ) {
+                $post_uploads_base = (string) get_post_meta( $post_id, '_hacklab_migration_uploads_base', true );
+            }
+
+            if ( $post_uploads_base !== '' ) {
                 $rewrite = rewrite_post_media_urls(
                     $post_id,
-                    (string) $options['uploads_base'],
+                    $post_uploads_base,
                     $blog_id,
                     (bool) $force_base_prefix,
                     $dry_run
