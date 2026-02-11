@@ -903,22 +903,42 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
 
     $summary = [ 'content' => 0, 'meta' => 0, 'attachment' => 0, 'errors' => [] ];
 
-    // Conteúdo
+    $all_steps_ok = true;
+
+   /*
+     * -------------------------------------------------------------------------
+     * Conteúdo
+     * -------------------------------------------------------------------------
+     */
     $old_content = (string) $post->post_content;
     if ( $old_content !== '' ) {
         $new_content = replace_content_urls( $old_content, $uploads_base, $new_base, $remote_blog_id, $strip_sites_prefix );
         if ( $new_content !== $old_content ) {
+
             if ( ! $dry_run ) {
-                wp_update_post( [
-                    'ID'           => $post_id,
-                    'post_content' => $new_content,
-                ] );
+                $result = wp_update_post(
+                    [
+                        'ID'           => $post_id,
+                        'post_content' => $new_content,
+                    ],
+                    true
+                );
+
+                if ( is_wp_error( $result ) ) {
+                    $all_steps_ok = false;
+                    $summary['errors'][] = $result->get_error_message();
+                }
             }
+
             $summary['content']++;
         }
     }
 
-    // Meta
+    /*
+     * -------------------------------------------------------------------------
+     * Meta
+     * -------------------------------------------------------------------------
+     */
     $meta_keys = get_post_custom_keys( $post_id ) ?: [];
     foreach ( $meta_keys as $meta_key ) {
         if ( strpos( $meta_key, '_hacklab_migration_' ) === 0 ) {
@@ -939,35 +959,83 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
             }
 
             if ( ! $dry_run ) {
-                update_post_meta( $post_id, $meta_key, $new, $old_raw );
+                $updated = update_post_meta( $post_id, $meta_key, $new, $old_raw );
+
+                if ( $updated === false ) {
+                    $all_steps_ok = false;
+                    $summary['errors'][] = "Erro ao atualizar meta {$meta_key}";
+                }
             }
 
             $summary['meta']++;
         }
     }
 
-    // Attachment metadata
+    /*
+     * -------------------------------------------------------------------------
+     * Attachment metadata
+     * -------------------------------------------------------------------------
+     */
     if ( $post->post_type === 'attachment' ) {
+        // _wp_attached_file
         $attached_file = (string) get_post_meta( $post_id, '_wp_attached_file', true );
-        $new_file      = normalize_attached_file_for_single( $attached_file, $remote_blog_id, $strip_sites_prefix );
+
+        $new_file = normalize_attached_file_for_single(
+            $attached_file,
+            $remote_blog_id,
+            $strip_sites_prefix
+        );
 
         if ( $attached_file !== '' && $new_file !== $attached_file ) {
+
             if ( ! $dry_run ) {
-                update_post_meta( $post_id, '_wp_attached_file', $new_file );
+                $updated = update_post_meta(
+                    $post_id,
+                    '_wp_attached_file',
+                    $new_file
+                );
+
+                if ( $updated === false ) {
+                    $all_steps_ok = false;
+                    $summary['errors'][] = 'Erro ao atualizar _wp_attached_file';
+                }
             }
+
             $summary['attachment']++;
         }
 
+        // _wp_attachment_metadata
         $meta = get_post_meta( $post_id, '_wp_attachment_metadata', true );
+
         if ( is_array( $meta ) && $meta ) {
-            $new_meta = normalize_attachment_metadata_for_single( $meta, $remote_blog_id, $strip_sites_prefix );
+
+            $new_meta = normalize_attachment_metadata_for_single(
+                $meta,
+                $remote_blog_id,
+                $strip_sites_prefix
+            );
+
             if ( $new_meta !== $meta ) {
                 if ( ! $dry_run ) {
-                    update_post_meta( $post_id, '_wp_attachment_metadata', $new_meta );
+                    $updated = update_post_meta(
+                        $post_id,
+                        '_wp_attachment_metadata',
+                        $new_meta
+                    );
+
+                    if ( $updated === false ) {
+                        $all_steps_ok = false;
+                        $summary['errors'][] = 'Erro ao atualizar _wp_attachment_metadata';
+                    }
                 }
+
                 $summary['attachment']++;
             }
         }
+    }
+
+    if ( ! $dry_run && $all_steps_ok ) {
+        update_post_meta( $post_id, '_hacklab_migration_attachment_processed', 1 );
     }
 
     return $summary;
