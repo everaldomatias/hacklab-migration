@@ -223,18 +223,10 @@ function import_remote_coauthors( array $args = [] ): array {
         'target_post_type' => '',
         'force_base_prefix' => false,
         'uploads_base' => '',
-        'write_mode'   => 'upsert',
         'run_id'       => 0
     ];
 
     $options = wp_parse_args( $args, $defaults );
-
-    if ( $options['uploads_base'] === '' ) {
-        $creds = get_credentials();
-        if ( ! empty( $creds['uploads_base'] ) ) {
-            $options['uploads_base'] = (string) $creds['uploads_base'];
-        }
-    }
 
     $fetch = (array) ( $options['fetch'] ?? [] );
     unset( $fetch['fields'] );
@@ -392,41 +384,28 @@ function import_remote_coauthors( array $args = [] ): array {
         }
 
         if ( $is_update ) { // Post já existe, tenta atualizar
+            $postarr['ID'] = $existing;
+            $local_id = (int) wp_update_post( $postarr, true );
 
-            if ( $options['write_mode'] != 'insert' ) { // Atualiza apenas quando `write_mode` for `update` ou `upsert`
-                $postarr['ID'] = $existing;
-                $local_id = (int) wp_update_post( $postarr, true );
-
-                if ( is_wp_error( $local_id ) ) {
-                    $summary['errors'][] = 'update: ' . $local_id->get_error_message();
-                    $summary['skipped']++;
-                    continue;
-                }
-
-                $summary['updated']++;
-            } else {
+            if ( is_wp_error( $local_id ) ) {
+                $summary['errors'][] = 'update: ' . $local_id->get_error_message();
                 $summary['skipped']++;
+                continue;
             }
 
+            $summary['updated']++;
         } else {
+            $local_id = (int) wp_insert_post( $postarr, true );
 
-            if ( $options['write_mode'] != 'update' ) { // Cria apenas quando `write_mode` for `insert` ou `upsert`
-
-                $local_id = (int) wp_insert_post( $postarr, true );
-
-                if ( is_wp_error( $local_id ) || $local_id <= 0 ) {
-                    $summary['errors'][] = 'insert: ' . ( is_wp_error( $local_id ) ? $local_id->get_error_message() : 'unknown' );
-                    $summary['skipped']++;
-                    continue;
-                }
-
-                add_post_meta( $local_id, '_hacklab_migration_source_id', $remote_id, true );
-                add_post_meta( $local_id, '_hacklab_migration_source_blog', $blog_id, true );
-                $summary['imported']++;
-            } else {
+            if ( is_wp_error( $local_id ) || $local_id <= 0 ) {
+                $summary['errors'][] = 'insert: ' . ( is_wp_error( $local_id ) ? $local_id->get_error_message() : 'unknown' );
                 $summary['skipped']++;
+                continue;
             }
 
+            add_post_meta( $local_id, '_hacklab_migration_source_id', $remote_id, true );
+            add_post_meta( $local_id, '_hacklab_migration_source_blog', $blog_id, true );
+            $summary['imported']++;
         }
 
         if ( ! isset( $local_id ) ) {

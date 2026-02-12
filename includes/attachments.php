@@ -25,7 +25,7 @@ function import_remote_attachments( array $args = [] ) : array {
 
     $options = wp_parse_args( $args, $defaults );
 
-    $rows = is_array( $options['rows'] ) ? $options['rows'] : [];
+    $rows = $options['rows'];
 
     $summary = [
         'content_rewritten' => 0,
@@ -736,10 +736,10 @@ function replace_content_urls( string $html, string $uploads_base, string $new_u
     if ( $strip_sites_prefix ) {
         $escaped = preg_quote( rtrim( $new_uploads_base, '/' ), '#' );
         $out = preg_replace( "#({$escaped})/sites/\\d+/#", '$1/', $out );
+    }
 
-        if ( $remote_blog_id && $remote_blog_id > 1 ) {
-            $out = prefix_upload_filename( $out, (int) $remote_blog_id );
-        }
+    if ( $remote_blog_id && $remote_blog_id > 1 ) {
+        $out = prefix_upload_filename( $out, (int) $remote_blog_id );
     }
 
     return $out;
@@ -841,8 +841,12 @@ function rewrite_meta_attachments_value( $value, array $att_map, array $url_map,
                 $new_val = prefix_upload_filename( $new_val, (int) $remote_blog_id );
             }
         } elseif ( $remote_blog_id && strpos( $new_val, 'sites/' . (int) $remote_blog_id . '/' ) === 0 ) {
-            $new_val = ltrim( substr( $new_val, strlen( 'sites/' . (int) $remote_blog_id . '/' ) ), '/' );
+        $new_val = ltrim( substr( $new_val, strlen( 'sites/' . (int) $remote_blog_id . '/' ) ), '/' );
+
+        if ( $remote_blog_id > 1 ) {
+            $new_val = prefix_upload_filename( $new_val, (int) $remote_blog_id );
         }
+    }
 
         return $new_val;
     }

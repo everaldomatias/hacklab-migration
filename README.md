@@ -2,6 +2,15 @@
 
 ## Changelog
 
+
+0.0.19 - Refatora comando run-import para ser completo (importando termos, metas, imagens com search-replace no content, etc).
+- Correção no prefixo das imagens;
+- Adiciona parâmetros lang e search-replace no comando run-import;
+- Melhora o suporte ao WPML, definindo o idioma padrão ao importar;
+- Remove parâmetro write_mode
+- Adiciona função stop_the_insanity() para melhor a performance das ações no WP local;
+- Corrige bug na função find_local_posts() para pesquisar também no post_type = page.
+
 0.0.1 - Versão inicial
 
 ## Compilação dos assets
@@ -49,7 +58,7 @@ Executar callbacks antes e depois da importação
 
 Reescrever URLs de mídia antigas durante a importação
 
-`wp run-import uploads_base=https://site-antigo.com/wp-content/uploads`
+`wp run-import --uploads_base=https://site-antigo.com/wp-content/uploads`
 
 Importar somente a 1ª etapa (posts brutos), para um post type temporário e sem termos/mídia:
 

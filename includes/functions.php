@@ -28,7 +28,7 @@ function run_import( array $args = [] ) : array {
         'target_post_type'  => '',
         'force_base_prefix' => false,
         'with_media'        => true,
-        'write_mode'        => 'upsert',
+        'uploads_base'      => '',
         'run_id'            => 0
     ];
 
@@ -36,13 +36,6 @@ function run_import( array $args = [] ) : array {
 
     if ( (int) $options['run_id'] <= 0 && ! $options['dry_run'] ) {
         $options['run_id'] = next_import_run_id();
-    }
-
-    if ( empty( $options['uploads_base'] ) ) {
-        $creds = get_credentials();
-        if ( ! empty( $creds['uploads_base'] ) ) {
-            $options['uploads_base'] = (string) $creds['uploads_base'];
-        }
     }
 
     $posts_summary = import_remote_posts( [
@@ -60,7 +53,6 @@ function run_import( array $args = [] ) : array {
         'target_post_type' => (string) $options['target_post_type'],
         'force_base_prefix'=> (bool) $options['force_base_prefix'],
         'uploads_base'     => (string) $options['uploads_base'],
-        'write_mode'       => $options['write_mode'],
         'run_id'           => (int) $options['run_id']
     ] );
 
@@ -1058,14 +1050,21 @@ function get_remote_post_types( int $blog_id ): array {
  * Aplica filtros de conteúdo ao texto fornecido.
 
  * @param string $content O conteúdo a ser filtrado.
+ * @param array $replaces (Opcional)
  * @param array $row (Opcional) Dados adicionais associados ao conteúdo. Padrão é um array vazio.
  * @param array $options (Opcional) Opções adicionais para o processamento. Padrão é um array vazio.
  *
  * @return string O conteúdo filtrado.
  */
-function apply_text_filters( string $content, array $row = [], array $options = [] ): string {
+function apply_text_filters( string $content, array $replaces = [], array $row = [], array $options = [] ): string {
     $content = remove_divi_tags( $content );
-    return $content;
+
+    if ( empty( $replaces ) ) {
+        return $content;
+    }
+
+    // Exemplo de input $replaces: ['http://old.com' => 'https://new.com']
+    return strtr( $content, $replaces );
 }
 
 /**
@@ -1170,6 +1169,176 @@ function get_supported_post_types() {
     // Add support to another post_types
     $post_types['guest-author'] = 'guest-author';
     $post_types['migration'] = 'migration';
+    $post_types['page'] = 'page';
 
     return array_values( $post_types );
+}
+
+/**
+ * Limpa a memória do PHP durante processos longos.
+ * Essencial para evitar 'Allowed memory size exhausted'.
+ */
+function stop_the_insanity() {
+    global $wpdb, $wp_object_cache;
+
+    // 1. Limpa log de queries (se SAVEQUERIES estiver on)
+    $wpdb->queries = [];
+
+    // 2. Limpa o Cache de Objetos (apenas da memória RAM atual)
+    // Nota: Se usar Redis/Memcached, isso não limpa o banco externo, apenas o array local do PHP.
+    if ( is_object( $wp_object_cache ) ) {
+        $wp_object_cache->group_ops      = [];
+        $wp_object_cache->stats          = [];
+        $wp_object_cache->memcache       = [];
+        $wp_object_cache->cache          = [];
+
+        // Método oficial disponível em versões mais recentes do WP para runtime cache
+        if ( method_exists( $wp_object_cache, '__remoteset' ) ) {
+            $wp_object_cache->__remoteset();
+        }
+    }
+}
+
+/**
+ * Define o idioma do post no WPML após a importação.
+ *
+ * @param int    $post_id   ID do post local.
+ * @param string $post_type Post type do post.
+ * @param string $lang_code Código do idioma (padrão: pt-br).
+ */
+function set_post_wpml_language( int $post_id, string $post_type, string $lang_code ): void {
+    if ( ! defined( 'ICL_SITEPRESS_VERSION' ) ) return;
+
+    $element_type = 'post_' . $post_type;
+    $trid = apply_filters( 'wpml_element_trid', NULL, $post_id, $element_type );
+
+    do_action( 'wpml_set_element_language_details', [
+        'element_id'           => $post_id,
+        'element_type'         => $element_type,
+        'trid'                 => $trid,
+        'language_code'        => $lang_code,
+        'source_language_code' => null
+    ] );
+}
+
+/**
+ * Importa e vincula a imagem destacada
+ */
+function process_post_thumbnail_import( int $local_post_id, int $remote_thumb_id, int $blog_id, array $options ) {
+    $local_thumb_id = find_local_post( $remote_thumb_id, $blog_id );
+
+    if ( ! $local_thumb_id ) {
+        $att_info = fetch_remote_attachments_by_ids( [$remote_thumb_id], $blog_id, $options['force_base_prefix'] );
+
+        if ( ! empty( $att_info[$remote_thumb_id] ) ) {
+            $data = $att_info[$remote_thumb_id];
+            $local_thumb_id = register_local_attachments(
+                $data['post'],
+                $data['meta'],
+                $blog_id,
+                $options['run_id'],
+                $blog_id,
+                $options['force_base_prefix']
+            );
+        }
+    }
+
+    if ( $local_thumb_id > 0 ) {
+        set_post_thumbnail( $local_post_id, $local_thumb_id );
+    }
+}
+
+/**
+ * Processa termos passados via CLI (add/set/rm).
+ * * @param int   $post_id ID do post recém importado/atualizado.
+ * @param array $options Array de opções vindo do CLI.
+ */
+function process_cli_terms( int $post_id, array $options ) {
+    if ( ! empty( $options['term_add'] ) ) {
+        foreach ( $options['term_add'] as $tax => $terms ) {
+            if ( ! taxonomy_exists( $tax ) ) continue;
+
+            $term_ids = resolve_term_ids( $terms, $tax );
+
+            if ( ! empty( $term_ids ) ) {
+                wp_set_object_terms( $post_id, $term_ids, $tax, true );
+            }
+        }
+    }
+
+    if ( ! empty( $options['term_set'] ) ) {
+        foreach ( $options['term_set'] as $tax => $terms ) {
+            if ( ! taxonomy_exists( $tax ) ) continue;
+
+            $term_ids = resolve_term_ids( $terms, $tax );
+
+            wp_set_object_terms( $post_id, $term_ids, $tax, false );
+        }
+    }
+
+    if ( ! empty( $options['term_rm'] ) ) {
+        foreach ( $options['term_rm'] as $tax => $terms ) {
+            if ( ! taxonomy_exists( $tax ) ) continue;
+
+            $term_ids = resolve_term_ids( $terms, $tax );
+
+            if ( ! empty( $term_ids ) ) {
+                wp_remove_object_terms( $post_id, $term_ids, $tax );
+            }
+        }
+    }
+}
+
+/**
+ * Converte slugs/nomes em IDs
+ */
+/**
+ * Converte strings de termos (nomes, slugs ou IDs) em um array de IDs de termos reais.
+ * Cria o termo se ele não existir.
+ *
+ * @param string|array $terms_input Ex: "News, Tech" ou [12, "Tech"]
+ * @param string       $taxonomy    Taxonomia alvo (ex: category)
+ * @return array       Array de IDs inteiros.
+ */
+function resolve_term_ids( $terms_input, string $taxonomy ): array {
+    $clean_ids = [];
+
+    if ( is_string( $terms_input ) ) {
+        $terms_array = explode( ',', $terms_input );
+    } else {
+        $terms_array = (array) $terms_input;
+    }
+
+    foreach ( $terms_array as $term ) {
+        $term = trim( $term );
+        if ( empty( $term ) ) continue;
+
+        $term_id = 0;
+
+        if ( is_numeric( $term ) ) {
+            $existing = term_exists( (int) $term, $taxonomy );
+            if ( $existing ) {
+                $term_id = (int) ( is_array( $existing ) ? $existing['term_id'] : $existing );
+            }
+        }
+
+        if ( ! $term_id ) {
+            $existing = term_exists( $term, $taxonomy );
+
+            if ( $existing ) {
+                $term_id = (int) ( is_array( $existing ) ? $existing['term_id'] : $existing );
+            } else {
+                $inserted = wp_insert_term( $term, $taxonomy );
+                if ( ! is_wp_error( $inserted ) ) {
+                    $term_id = $inserted['term_id'];
+                }
+            }
+        }
+
+        if ( $term_id > 0 ) {
+            $clean_ids[] = $term_id;
+        }
+    }
+
+    return array_values( array_unique( $clean_ids ) );
 }

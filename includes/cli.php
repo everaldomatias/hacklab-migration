@@ -91,6 +91,21 @@ class Commands {
                 continue;
             }
 
+            if ( $argument_name === 'lang' ) {
+                $options['lang'] = $argument_value;
+                continue;
+            }
+
+            if ( $argument_name === 'search-replace' ) {
+                $pairs = explode( ',', $argument_value );
+                $replaces = [];
+                foreach( $pairs as $pair ) {
+                    list( $old, $new ) = explode( '=', $pair );
+                    $replaces[$old] = $new;
+                }
+                $options['search_replace'] = $replaces;
+            }
+
             if ( strpos( $argument_name, 'q:' ) === 0 ) {
                 $key = substr( $argument_name, 2 ); // remove "q:"
 
@@ -237,14 +252,6 @@ class Commands {
                     if ( is_string( $argument_value ) && $argument_value !== '' ) {
                         $options['uploads_base'] = $argument_value;
                     }
-                    break;
-
-                case 'write_mode':
-                    if ( is_string( $argument_value ) && $argument_value !== '' ) {
-                        // Determina o modo de importação, insere novos posts, atualiza posts existentes ou insere e atualiza quando possível
-                        $options['write_mode'] = in_array( $argument_value, [ 'insert', 'update', 'upsert' ], true ) ? $argument_value : 'upsert';
-                    }
-
                     break;
 
                 case 'force_base_prefix':
@@ -1069,13 +1076,6 @@ class Commands {
 
         $dry_run           = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
         $force_base_prefix = \WP_CLI\Utils\get_flag_value( $command_args, 'force_base_prefix', false );
-
-        if ( empty( $options['uploads_base'] ) ) {
-            $creds = get_credentials();
-            if ( ! empty( $creds['uploads_base'] ) ) {
-                $options['uploads_base'] = (string) $creds['uploads_base'];
-            }
-        }
 
         $query_args = [
             'post_type'  => $post_type,
