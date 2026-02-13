@@ -2,6 +2,7 @@
 
 ## Changelog
 
+0.0.20 - Evita sobrescrever o post_type ao atualizar um post já importado.
 
 0.0.19 - Refatora comando run-import para ser completo (importando termos, metas, imagens com search-replace no content, etc).
 - Correção no prefixo das imagens;
