@@ -153,6 +153,7 @@ function import_remote_posts( array $args = [] ): array {
         $local_id    = 0;
 
         if ( $is_update ) {
+            unset( $postarr['post_type'] );
             $postarr['ID'] = $existing_id;
             $local_id = wp_update_post( $postarr );
             if ( ! is_wp_error( $local_id ) ) $summary['updated']++;
@@ -166,7 +167,11 @@ function import_remote_posts( array $args = [] ): array {
             continue;
         }
 
-        set_post_wpml_language( $local_id, $postarr['post_type'], $options['lang'] );
+        $actual_post_type = get_post_type( $local_id );
+
+        if ( $actual_post_type && ! empty( $options['lang'] ) ) {
+            set_post_wpml_language( $local_id, $actual_post_type, $options['lang'] );
+        }
 
         if ( $options['assign_terms'] ) {
             $remote_terms = $r['remote_terms'] ?? [];
