@@ -197,6 +197,33 @@ function import_remote_posts( array $args = [] ): array {
             }
         }
 
+        // Remove imagem do content caso seja a mesma da imagem destacada do post
+        if ( class_exists( '\hacklabr\Utils\Helpers' ) && $actual_post_type !== 'attachment' ) {
+
+            $current_thumb_id = (int) get_post_thumbnail_id( $local_id );
+            $remote_thumb_id = (int) ( $post_meta['_thumbnail_id'][0] ?? 0 );
+
+            if ( $current_thumb_id > 0 && $current_thumb_id !== $remote_thumb_id ) {
+                $content_raw = $postarr['post_content'] ?? '';
+
+                if ( ! empty( $content_raw ) ) {
+                    $new_content = \hacklabr\Utils\Helpers::remove_featured_image_from_content(
+                        $content_raw,
+                        $current_thumb_id
+                    );
+
+                    if ( $new_content !== $content_raw ) {
+                        wp_update_post( [
+                            'ID'           => $local_id,
+                            'post_content' => $new_content
+                        ] );
+
+                        $row['post_content'] = $new_content;
+                    }
+                }
+            }
+        }
+
         if ( ! empty( $options['fn_pos'] ) && is_callable( $options['fn_pos'] ) ) {
             call_user_func( $options['fn_pos'], $local_id, $row, $is_update, $options['dry_run'] );
         }
