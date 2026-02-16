@@ -23,8 +23,6 @@ function import_remote_posts( array $args = [] ): array {
         'dry_run'           => false,
         'fn_pre'            => null,
         'fn_pos'            => null,
-        'assign_terms'      => true,
-        'map_users'         => true,
         'meta_ops'          => [],
         'term_add'          => [],
         'term_set'          => [],
@@ -85,6 +83,9 @@ function import_remote_posts( array $args = [] ): array {
 
     foreach ( $rows as $index => $row ) {
         $remote_id = (int) $row['ID'];
+        $remote_type_raw   = (string) ( $row['post_type'] ?? '' );
+        $remote_type       = sanitize_key( $remote_type_raw );
+        $remote_type_saved = $remote_type !== '' ? $remote_type : 'post';
 
         if ( defined( 'WP_CLI' ) && WP_CLI ) {
             WP_CLI::log( sprintf( "Processando remoto ID: %d (%d/%d)", $remote_id, $index + 1, count($rows) ) );
@@ -101,9 +102,8 @@ function import_remote_posts( array $args = [] ): array {
         // Author mapping
         $post_author = 0;
         $remote_author = (int) ( $row['post_author'] ?? 0 );
-        if ( $options['map_users'] && $remote_author ) {
+        if ( $remote_author ) {
             $post_author = find_local_user( $remote_author, $blog_id );
-            // Se não achar o autor localmente, importa
             if ( ! $post_author ) {
                 $post_author = import_remote_user( $remote_author, $blog_id, $options['dry_run'], $options['run_id'] );
             }
@@ -132,8 +132,43 @@ function import_remote_posts( array $args = [] ): array {
 
         $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
 
-        $postarr['meta_input']['_hacklab_migration_source_id']   = $remote_id;
-        $postarr['meta_input']['_hacklab_migration_source_blog'] = $blog_id;
+        $postarr['meta_input'] = [];
+        $remote_parent = isset( $row['post_parent'] ) ? (int) $row['post_parent'] : 0;
+
+        if ( $remote_author > 0 ) {
+            $postarr['meta_input']['_hacklab_migration_remote_author'] = $remote_author;
+        }
+
+        if ( $remote_parent >= 0 ) {
+            $postarr['meta_input']['_hacklab_migration_remote_parent'] = $remote_parent;
+        }
+
+        $run_id = (int) ( $options['run_id'] ?? 0 );
+        if ( $run_id > 0 ) {
+            $postarr['meta_input'][ '_hacklab_migration_import_run_id' ] = $run_id;
+        }
+
+        $uploads_base = (string) ( $options['uploads_base'] ?? '' );
+        if ( $uploads_base !== '' ) {
+            $postarr['meta_input']['_hacklab_migration_uploads_base'] = $uploads_base;
+        }
+
+        $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
+        $postarr['meta_input']['_hacklab_migration_source_post_type'] = $remote_type_saved;
+        $postarr['meta_input']['_hacklab_migration_last_updated'] = time();
+
+        if ( ! empty( $post_meta['_edit_last'] ) ) {
+            $remote_user_id = (int) $post_meta['_edit_last'];
+            $local_user_id = 0;
+
+            $local_user_id = find_local_user( $remote_user_id, $blog_id );
+
+            if ( ! $local_user_id ) {
+                $local_user_id = import_remote_user( $remote_user_id, $blog_id, $options['dry_run'], $run_id );
+            }
+
+            $post_meta['_edit_last'] = (int) $local_user_id;
+        }
 
         foreach ( $post_meta as $mkey => $mval ) {
             if ( is_array( $mval ) || is_object( $mval ) ) {
@@ -152,13 +187,32 @@ function import_remote_posts( array $args = [] ): array {
         $is_update   = $existing_id > 0;
         $local_id    = 0;
 
+        // Com o parâmetro 'fn_pre' é possível alterar os dados do post antes de ser criado no WP local.
+        if ( ! empty( $options['fn_pre'] ) && is_callable( $options['fn_pre'] ) ) {
+            $row['blog_id'] = $blog_id;
+
+            try {
+                ( $options['fn_pre'] )( $postarr, $options, $row );
+            } catch ( \Throwable $e ) {
+                $summary['errors'][] = "fn_pre ({$row['ID']}): " . $e->getMessage();
+            }
+        }
+
         if ( $is_update ) {
-            unset( $postarr['post_type'] );
+            // Com o parâmetro 'target_post_type', atualiza o post_type do post local
+            if ( isset( $options['target_post_type'] ) && ! empty( $options['target_post_type'] ) ) {
+                $postarr['post_type'] = $options['target_post_type'];
+            } else {
+                unset( $postarr['post_type'] );
+            }
+
             $postarr['ID'] = $existing_id;
             $local_id = wp_update_post( $postarr );
             if ( ! is_wp_error( $local_id ) ) $summary['updated']++;
         } else {
             $local_id = wp_insert_post( $postarr );
+            add_post_meta( $local_id, '_hacklab_migration_source_id', $remote_id, true );
+            add_post_meta( $local_id, '_hacklab_migration_source_blog', $blog_id, true );
             if ( ! is_wp_error( $local_id ) ) $summary['imported']++;
         }
 
@@ -173,17 +227,16 @@ function import_remote_posts( array $args = [] ): array {
             set_post_wpml_language( $local_id, $actual_post_type, $options['lang'] );
         }
 
-        if ( $options['assign_terms'] ) {
-            $remote_terms = $r['remote_terms'] ?? [];
+        $remote_terms = $row['remote_terms'] ?? [];
 
-            // Co-Authors Plus
-            if ( ! empty( $remote_terms['author'] ) && function_exists( 'cap_assign_coauthors_to_post' ) ) {
-                cap_assign_coauthors_to_post( $local_id, $remote_terms );
-                unset( $remote_terms['author'] );
-            }
-
-            ensure_terms_and_assign( $local_id, get_post_type( $local_id ), $remote_terms, [], $blog_id );
+        // Co-Authors Plus
+        if ( ! empty( $remote_terms['author'] ) && function_exists( 'cap_assign_coauthors_to_post' ) ) {
+            cap_assign_coauthors_to_post( $local_id, $remote_terms );
+            unset( $remote_terms['author'] );
         }
+
+        import_terms_as_tags( $local_id, $remote_terms, $blog_id );
+        save_term_as_meta( $local_id, $remote_terms, $blog_id );
 
         // Aplica termos extras da CLI (add/set/rm)
         process_cli_terms( $local_id, $options );

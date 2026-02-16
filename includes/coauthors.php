@@ -215,7 +215,6 @@ function import_remote_coauthors( array $args = [] ): array {
         'fn_pre'       => null,
         'fn_pos'       => null,
         'assign_terms' => true,
-        'map_users'    => true,
         'meta_ops'     => [],
         'term_add'     => [],
         'term_set'     => [],
@@ -293,9 +292,7 @@ function import_remote_coauthors( array $args = [] ): array {
         $remote_author = (int) ( $row['post_author'] ?? 0 );
         $post_author = 0;
 
-        if ( $options['map_users'] ) {
-            $post_author = $remote_author ? find_local_user( $remote_author, $blog_id ) : 0;
-        }
+        $post_author = $remote_author ? find_local_user( $remote_author, $blog_id ) : 0;
 
         if ( $post_name === '' ) {
             $post_name = sanitize_title( (string) $row['post_title'] ?: $remote_id );
@@ -344,12 +341,10 @@ function import_remote_coauthors( array $args = [] ): array {
             $remote_user_id = (int) $post_meta['_edit_last'];
             $local_user_id = 0;
 
-            if ( $options['map_users'] ) {
-                $local_user_id = find_local_user( $remote_user_id, $blog_id );
+            $local_user_id = find_local_user( $remote_user_id, $blog_id );
 
-                if ( ! $local_user_id ) {
-                    $local_user_id = import_remote_user( $remote_user_id, $blog_id, $options['dry_run'], $run_id );
-                }
+            if ( ! $local_user_id ) {
+                $local_user_id = import_remote_user( $remote_user_id, $blog_id, $options['dry_run'], $run_id );
             }
 
             $post_meta['_edit_last'] = (int) $local_user_id;

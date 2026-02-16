@@ -19,8 +19,6 @@ function run_import( array $args = [] ) : array {
         'fetch'             => ['numberposts' => 10],
         'fn_pos'            => null,
         'fn_pre'            => null,
-        'assign_terms'      => true,
-        'map_users'         => true,
         'meta_ops'          => [],
         'term_add'          => [],
         'term_set'          => [],
@@ -44,8 +42,6 @@ function run_import( array $args = [] ) : array {
         'dry_run'          => $options['dry_run'],
         'fn_pre'           => $options['fn_pre'],
         'fn_pos'           => $options['fn_pos'],
-        'assign_terms'     => (bool) $options['assign_terms'],
-        'map_users'        => (bool) $options['map_users'],
         'meta_ops'         => (array) $options['meta_ops'],
         'term_add'         => (array) $options['term_add'],
         'term_set'         => (array) $options['term_set'],
@@ -395,6 +391,65 @@ function ensure_terms_and_assign( int $post_id, string $post_type, array $terms_
             }
         }
     }
+}
+
+/**
+ * Importa termos de diversas taxonomias originais como Tags (post_tag) no WordPress.
+ *
+ * @param int|string $post_id  ID do post que receberá as tags.
+ * @param array      $terms    Array aninhado de termos por taxonomia.
+ * @param int        $blog_id  ID do blog de origem para auditoria.
+ * @return void
+ */
+function import_terms_as_tags( $post_id, array $terms = [], $blog_id = 1 ) {
+    if ( empty( $terms ) ) {
+        return;
+    }
+
+    $tag_ids_to_assign = [];
+
+    foreach ( $terms as $source_taxonomy => $term_list ) {
+        foreach ( $term_list as $term_data ) {
+            $term_name = $term_data['name'];
+            $term_slug = $term_data['slug'];
+            $source_id = $term_data['term_id'];
+
+            $existing_tag = get_term_by( 'slug', $term_slug, 'post_tag' );
+
+            if ( $existing_tag ) {
+                $tag_id = $existing_tag->term_id;
+            } else {
+                $inserted_term = wp_insert_term( $term_name, 'post_tag', [
+                    'slug' => $term_slug
+                ] );
+
+                if ( is_wp_error( $inserted_term ) ) {
+                    $tag_id = $inserted_term->get_error_data( 'term_exists' ) ?: null;
+                } else {
+                    $tag_id = $inserted_term['term_id'];
+                }
+            }
+
+            if ( $tag_id ) {
+                update_term_meta( $tag_id, '_hacklab_migration_source_taxonomy', $source_taxonomy );
+                update_term_meta( $tag_id, '_hacklab_migration_source_id', $source_id );
+                update_term_meta( $tag_id, '_hacklab_migration_source_blog', $blog_id );
+
+                $tag_ids_to_assign[] = (int) $tag_id;
+            }
+        }
+    }
+
+    if ( ! empty( $tag_ids_to_assign ) ) {
+        wp_set_post_terms( $post_id, array_unique( $tag_ids_to_assign ), 'post_tag', true );
+    }
+}
+
+/**
+ * Salva os termos e taxonomias como metadado
+ */
+function save_term_as_meta( $post_id, array $terms = [], $blog_id = 1 ) {
+    update_post_meta( $post_id, '_hacklab_migration_remote_terms', $terms );
 }
 
 function attach_meta_to_rows( \wpdb $ext, array $creds, array $rows, ?int $blog_id, bool $force_base_prefix = false ) {

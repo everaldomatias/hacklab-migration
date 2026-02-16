@@ -223,16 +223,6 @@ class Commands {
                     $options['with_media'] = self::to_bool( $argument_value, true );
                     break;
 
-                case 'assign_terms':
-                case 'with_terms':
-                    $options['assign_terms'] = self::to_bool( $argument_value, true );
-                    break;
-
-                case 'map_users':
-                case 'with_users':
-                    $options['map_users'] = self::to_bool( $argument_value, true );
-                    break;
-
                 case 'fn_pre':
                 case 'fn-pre':
                     if ( is_string( $argument_value ) && $argument_value !== '' ) {
@@ -291,14 +281,6 @@ class Commands {
         $options['term_add'] = $options['term_add'] ?? [];
         $options['term_set'] = $options['term_set'] ?? [];
         $options['term_rm']  = $options['term_rm']  ?? [];
-
-        if ( ! array_key_exists( 'assign_terms', $options ) ) {
-            $options['assign_terms'] = true;
-        }
-
-        if ( ! array_key_exists( 'map_users', $options ) ) {
-            $options['map_users'] = true;
-        }
 
         if ( ! array_key_exists( 'dry_run', $options ) ) {
             $options['dry_run'] = false;
