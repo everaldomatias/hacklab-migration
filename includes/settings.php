@@ -53,6 +53,15 @@ function add_admin_menu() {
         'hacklab-migration-find-local',
         __NAMESPACE__ . '\\render_local_lookup_page'
     );
+
+    add_submenu_page(
+        'hacklab-migration',
+        __( 'Listar por importação', 'hacklabr' ),
+        __( 'Listar por importação', 'hacklabr' ),
+        HACKLAB_MIGRATION_CAP,
+        'hacklab-migration-import-run',
+        __NAMESPACE__ . '\\render_import_run_list_page'
+    );
 }
 
 /**
@@ -686,6 +695,128 @@ function render_local_lookup_page() {
                     <?php endforeach; ?>
                 </tbody>
             </table>
+        <?php endif; ?>
+    </div>
+    <?php
+}
+
+/**
+ * Renderiza a página para listar posts filtrados por _hacklab_migration_import_run_id.
+ */
+function render_import_run_list_page() {
+    if ( ! current_user_can( HACKLAB_MIGRATION_CAP ) ) {
+        wp_die( esc_html__( 'Sem permissão.', 'hacklabr' ) );
+    }
+
+    $notice_key = 'hm_run_lookup';
+    $run_id     = isset( $_GET['run_id'] ) ? (int) $_GET['run_id'] : 0;
+    $paged      = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1;
+    $results    = [];
+
+    if ( $run_id > 0 ) {
+        $query = new \WP_Query( [
+            'post_type'      => get_supported_post_types(), // Usa os tipos suportados pelo plugin
+            'post_status'    => 'any',
+            'posts_per_page' => 50,
+            'paged'          => $paged,
+            'meta_query'     => [
+                [
+                    'key'     => '_hacklab_migration_import_run_id',
+                    'value'   => $run_id,
+                    'compare' => '=',
+                    'type'    => 'NUMERIC',
+                ],
+            ],
+        ] );
+        $results = $query->posts;
+        $max_pages = $query->max_num_pages;
+    }
+
+    ?>
+    <div class="wrap">
+        <h1><?php echo esc_html__( 'Posts por Rodada de Importação', 'hacklabr' ); ?></h1>
+
+        <form method="get" action="">
+            <input type="hidden" name="page" value="hacklab-migration-import-run">
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row">
+                        <label for="run_id"><?php esc_html_e( 'ID da Importação (Run ID)', 'hacklabr' ); ?></label>
+                    </th>
+                    <td>
+                        <input
+                            name="run_id"
+                            id="run_id"
+                            type="number"
+                            class="regular-text"
+                            min="1"
+                            value="<?php echo $run_id > 0 ? esc_attr( $run_id ) : ''; ?>"
+                            placeholder="Ex: 5"
+                        >
+                        <p class="description"><?php esc_html_e( 'Informe o número da rodada de importação para listar os posts associados.', 'hacklabr' ); ?></p>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button( __( 'Listar posts', 'hacklabr' ), 'primary', '' ); ?>
+        </form>
+
+        <?php if ( $run_id > 0 ) : ?>
+            <hr>
+            <h2><?php printf( esc_html__( 'Resultados para o Run ID: %d', 'hacklabr' ), $run_id ); ?></h2>
+
+            <?php if ( $results ) : ?>
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e( 'Local ID', 'hacklabr' ); ?></th>
+                            <th><?php esc_html_e( 'ID Remoto', 'hacklabr' ); ?></th>
+                            <th><?php esc_html_e( 'Título', 'hacklabr' ); ?></th>
+                            <th><?php esc_html_e( 'Post Type', 'hacklabr' ); ?></th>
+                            <th><?php esc_html_e( 'Status', 'hacklabr' ); ?></th>
+                            <th><?php esc_html_e( 'Ações', 'hacklabr' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $results as $p ) : ?>
+                            <?php
+                            // Busca o ID remoto original para facilitar a conferência
+                            $remote_id = get_post_meta( $p->ID, '_hacklab_migration_source_id', true );
+                            ?>
+                            <tr>
+                                <td><?php echo (int) $p->ID; ?></td>
+                                <td><?php echo esc_html( $remote_id ?: '—' ); ?></td>
+                                <td><strong><?php echo esc_html( get_the_title( $p ) ); ?></strong></td>
+                                <td><code><?php echo esc_html( $p->post_type ); ?></code></td>
+                                <td><?php echo esc_html( get_post_status( $p ) ); ?></td>
+                                <td>
+                                    <a href="<?php echo esc_url( get_edit_post_link( $p->ID ) ); ?>" target="_blank"><?php esc_html_e( 'Editar', 'hacklabr' ); ?></a> |
+                                    <a href="<?php echo esc_url( get_permalink( $p ) ); ?>" target="_blank"><?php esc_html_e( 'Ver', 'hacklabr' ); ?></a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+
+                <?php if ( isset($max_pages) && $max_pages > 1 ) : ?>
+                    <div class="tablenav">
+                        <div class="tablenav-pages">
+                            <?php
+                            echo paginate_links( [
+                                'base'    => add_query_arg( 'paged', '%#%' ),
+                                'format'  => '',
+                                'total'   => $max_pages,
+                                'current' => $paged,
+                            ] );
+                            ?>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
+            <?php else : ?>
+                <div class="notice notice-info">
+                    <p><?php esc_html_e( 'Nenhum post encontrado para este Run ID.', 'hacklabr' ); ?></p>
+                </div>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
     <?php
