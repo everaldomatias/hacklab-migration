@@ -200,11 +200,14 @@ function import_remote_posts( array $args = [] ): array {
 
         if ( $is_update ) {
             // Com o parâmetro 'target_post_type', atualiza o post_type do post local
-            if ( isset( $options['target_post_type'] ) && ! empty( $options['target_post_type'] ) ) {
-                $postarr['post_type'] = $options['target_post_type'];
-            } else {
-                unset( $postarr['post_type'] );
-            }
+            // if ( isset( $options['target_post_type'] ) && ! empty( $options['target_post_type'] ) ) {
+            //     $postarr['post_type'] = $options['target_post_type'];
+            // } else {
+            //     unset( $postarr['post_type'] );
+            // }
+
+            // Quando está atualizando um post, não altera o post_type
+            unset( $postarr['post_type'] );
 
             $postarr['ID'] = $existing_id;
             $local_id = wp_update_post( $postarr );
