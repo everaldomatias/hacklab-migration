@@ -65,6 +65,10 @@ function set_mes_ano_field( $post ) {
     $mes = get_post_meta( $post->ID, 'edicao_mes', true );
     $ano = get_post_meta( $post->ID, 'edicao_ano', true );
 
+    if ( ! $mes && ! $ano ) {
+        return false;
+    }
+
     $partes = array_filter( [ $mes, $ano ], function( $valor ) {
         return ! empty( trim( (string) $valor ) );
     } );
@@ -195,4 +199,14 @@ function fix_serialized_thumbnail_id( $post ) {
             echo "Post {$post->ID}: Corrigido de array para ID " . (int) $correct_id . "\n";
         }
     }
+}
+
+/**
+ * Função para agrupar múltiplos callbacks ao importar posts
+ */
+function run_callbacks( \WP_Post $post ) {
+    set_image_meta_field( $post );
+    set_mes_ano_field( $post );
+    set_link_info_url_field( $post );
+    set_pdf_field( $post );
 }
