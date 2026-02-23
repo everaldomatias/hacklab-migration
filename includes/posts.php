@@ -109,13 +109,12 @@ function import_remote_posts( array $args = [] ): array {
             }
         }
 
-        // Search & Replace + Limpeza de Conteúdo
-        $post_content = (string) ( $row['post_content'] ?? '' );
-        $post_excerpt = (string) ( $row['post_excerpt'] ?? '' );
+        $post_content_raw = (string) ( $row['post_content'] ?? '' );
+        $post_excerpt_raw = (string) ( $row['post_excerpt'] ?? '' );
 
-        // Aplica filtros de texto (replaces de URLs, etc)
-        $post_content = apply_text_filters( $post_content, $options['search_replace'] );
-        $post_excerpt = apply_text_filters( $post_excerpt, $options['search_replace'] );
+        // Aplica filtros/search-replace de texto (replaces de URLs, etc)
+        $post_content = apply_text_filters( $post_content_raw, $options['search_replace'] );
+        $post_excerpt = apply_text_filters( $post_excerpt_raw, $options['search_replace'] );
 
         $postarr = [
             'post_title'    => $row['post_title'] ? (string) $row['post_title'] : 'Sem título',
@@ -156,6 +155,8 @@ function import_remote_posts( array $args = [] ): array {
         $postarr['meta_input']['_hacklab_migration_source_meta'] = $post_meta;
         $postarr['meta_input']['_hacklab_migration_source_post_type'] = $remote_type_saved;
         $postarr['meta_input']['_hacklab_migration_last_updated'] = time();
+        $postarr['meta_input']['_hacklab_migration_source_content'] = $post_content_raw;
+        $postarr['meta_input']['_hacklab_migration_source_excerpt'] = $post_excerpt_raw;
 
         if ( ! empty( $post_meta['_edit_last'] ) ) {
             $remote_user_id = (int) $post_meta['_edit_last'];
