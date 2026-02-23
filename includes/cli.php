@@ -203,7 +203,6 @@ class Commands {
                         break;
 
                     default:
-                        // passa qualquer outro q: direto
                         $fetch[ $key ] = $argument_value;
                         break;
                 }
@@ -211,7 +210,11 @@ class Commands {
                 continue;
             }
 
-            switch ( $argument_name ) { // iniciam com "--"
+            switch ( $argument_name ) {
+                case 'chunk':
+                    $options['chunk'] = max( 1, (int) $argument_value );
+                    break;
+
                 case 'dry_run':
                 case 'dry-run':
                     $options['dry_run'] = self::to_bool( $argument_value ?? true );
@@ -300,20 +303,116 @@ class Commands {
         \WP_CLI::log( 'Iniciando run_import()...' );
         \WP_CLI::line();
 
-        $summary = run_import( $options );
+        $chunk = $options['chunk'] ?? 0;
 
-        \WP_CLI::line();
-        \WP_CLI::log( 'Posts encontrados, iniciando importação no WP local...' );
-        \WP_CLI::line();
-
-        if ( is_wp_error( $summary ) ) {
-            \WP_CLI::error( $summary->get_error_message() );
+        if ( $chunk <= 0 ) {
+            $summary = run_import( $options );
+            self::print_import_summary( $summary, $options );
+            return;
         }
 
-        if ( ! is_array( $summary ) ) {
-            \WP_CLI::error( 'run_import() retornou um resultado inválido.' );
+        if ( empty( $options['run_id'] ) && empty( $options['dry_run'] ) ) {
+            $options['run_id'] = next_import_run_id();
         }
 
+        $total_limit = isset( $options['fetch']['numberposts'] ) ? (int) $options['fetch']['numberposts'] : 0;
+        $offset      = isset( $options['fetch']['offset'] ) ? (int) $options['fetch']['offset'] : 0;
+        $iteration   = 1;
+
+        $total_summary = [
+            'posts' => [
+                'found_posts' => 0, 'imported' => 0, 'updated' => 0, 'skipped' => 0, 'map' => []
+            ],
+            'attachments' => [
+                'content_rewritten' => 0, 'found_posts' => 0, 'registered' => 0, 'reused' => 0,
+                'thumbnails_set' => 0, 'missing_files' => []
+            ],
+            'errors' => [],
+            'run_id' => $options['run_id'] ?? 0
+        ];
+
+        while ( true ) {
+            $current_chunk = $chunk;
+
+            if ( $total_limit > 0 ) {
+                $remaining = $total_limit - $total_summary['posts']['found_posts'];
+
+                if ( $remaining <= 0 ) {
+                    \WP_CLI::log( "Limite total de {$total_limit} posts atingido. Paginação concluída." );
+                    break;
+                }
+
+                if ( $current_chunk > $remaining ) {
+                    $current_chunk = $remaining;
+                }
+            }
+
+            $options['fetch']['numberposts'] = $current_chunk;
+            $options['fetch']['offset']      = $offset;
+
+            \WP_CLI::log( sprintf( "-> Processando Lote %d (Offset: %d | Limite do lote: %d)...", $iteration, $offset, $current_chunk ) );
+
+            $summary = run_import( $options );
+
+            if ( is_wp_error( $summary ) ) {
+                \WP_CLI::error( $summary->get_error_message() );
+                break;
+            }
+
+            $found_in_chunk = (int) ( $summary['posts']['found_posts'] ?? 0 );
+
+            $total_summary['posts']['found_posts'] += $found_in_chunk;
+            $total_summary['posts']['imported']    += (int) ( $summary['posts']['imported'] ?? 0 );
+            $total_summary['posts']['updated']     += (int) ( $summary['posts']['updated'] ?? 0 );
+            $total_summary['posts']['skipped']     += (int) ( $summary['posts']['skipped'] ?? 0 );
+
+            if ( ! empty( $summary['posts']['map'] ) ) {
+                $total_summary['posts']['map'] = $total_summary['posts']['map'] + $summary['posts']['map'];
+            }
+
+            $total_summary['attachments']['registered'] += (int) ( $summary['attachments']['registered'] ?? 0 );
+            $total_summary['attachments']['reused']     += (int) ( $summary['attachments']['reused'] ?? 0 );
+            $total_summary['attachments']['thumbnails_set'] += (int) ( $summary['attachments']['thumbnails_set'] ?? 0 );
+
+            if ( ! empty( $summary['attachments']['missing_files'] ) ) {
+                $total_summary['attachments']['missing_files'] = array_merge(
+                    $total_summary['attachments']['missing_files'],
+                    (array) $summary['attachments']['missing_files']
+                );
+            }
+
+            if ( ! empty( $summary['errors'] ) ) {
+                $total_summary['errors'] = array_merge( $total_summary['errors'], (array) $summary['errors'] );
+            }
+
+            if ( $found_in_chunk === 0 ) {
+                \WP_CLI::log( "Nenhum post retornado neste lote. O banco remoto foi esgotado." );
+                break;
+            }
+
+            if ( $found_in_chunk < $current_chunk ) {
+                \WP_CLI::log( "Lote final processado (retornou menos que {$current_chunk} posts)." );
+                break;
+            }
+
+            $offset += $current_chunk;
+            $iteration++;
+
+            stop_the_insanity();
+        }
+
+        \WP_CLI::line();
+        \WP_CLI::success( 'Importação em lotes finalizada. Gerando relatório total...' );
+
+        self::print_import_summary( $total_summary, $options );
+    }
+
+    /**
+     * Helper para exibir o resumo da importação no console.
+     * * @param array $summary Dados agregados da importação.
+     * @param array $options Opções originais passadas no comando.
+     */
+    private static function print_import_summary( array $summary, array $options ) {
         $posts       = $summary['posts'] ?? [];
         $attachments = $summary['attachments'] ?? [];
         $run_id      = (int) ( $summary['run_id'] ?? 0 );
@@ -331,7 +430,7 @@ class Commands {
             'registered'        => $attachments['registered'] ?? 0,
             'reused'            => $attachments['reused'] ?? 0,
             'thumbnails_set'    => $attachments['thumbnails_set'] ?? 0,
-            'missing_files'     => count( (array) $attachments['missing_files'] ) ?? 0
+            'missing_files'     => count( (array) ( $attachments['missing_files'] ?? [] ) )
         ];
 
         $separator = str_repeat( '#', 59 );
