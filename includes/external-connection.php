@@ -236,9 +236,20 @@ function check_connection( array $cfg ): array {
 /**
  * -------------------------------------------------------------------------
  * Conecta ao banco externo e retorna um \wpdb pronto para uso.
+ * Aplica o padrão Singleton para evitar 'Too many connections (1040)'.
  * -------------------------------------------------------------------------
  */
 function get_external_wpdb(): ?\wpdb {
+    static $ext_db = null;
+
+    if ( $ext_db instanceof \wpdb && ! empty( $ext_db->dbh ) ) {
+        if ( ! mysqli_ping( $ext_db->dbh ) ) {
+             $ext_db = null;
+        } else {
+             return $ext_db;
+        }
+    }
+
     $cfg = get_credentials();
 
     $host   = isset( $cfg['host'] )   ? trim( (string) $cfg['host'] )   : '';
@@ -260,35 +271,35 @@ function get_external_wpdb(): ?\wpdb {
 
     $connect_flag_supported = version_compare( $GLOBALS['wp_version'] ?? '6.1', '6.1', '>=' );
 
-    // Observação: $cfg['host'] pode conter host:port ou [ipv6]:port ou socket.
-    // O construtor de wpdb aceita uma string no host com esses formatos.
-    $ext = $connect_flag_supported
+    $ext_db = $connect_flag_supported
         ? new \wpdb( $cfg['user'], $cfg['pass'], $cfg['dbname'], (string)$cfg['host'], false)
         : new \wpdb( $cfg['user'], $cfg['pass'], $cfg['dbname'], (string)$cfg['host'] );
 
-    $ext->show_errors( false );
-    $ext->suppress_errors( true );
+    $ext_db->show_errors( false );
+    $ext_db->suppress_errors( true );
 
     if ( ! empty( $cfg['charset'] ) ) {
-        $ext->charset = (string) $cfg['charset'];
+        $ext_db->charset = (string) $cfg['charset'];
     }
     if ( ! empty( $cfg['collate'] ) ) {
-        $ext->collate = (string) $cfg['collate'];
+        $ext_db->collate = (string) $cfg['collate'];
     }
 
     $prefix = ! empty( $cfg['prefix'] ) ? (string) $cfg['prefix'] : 'wp_';
-    $ext->set_prefix( $prefix );
+    $ext_db->set_prefix( $prefix );
 
     if ( $connect_flag_supported ) {
-        if ( ! $ext->db_connect( false ) || ! empty( $ext->error ) ) {
+        if ( ! $ext_db->db_connect( false ) || ! empty( $ext_db->error ) ) {
+            $ext_db = null;
             return null;
         }
     } else {
         // WP < 6.1: o construtor já tenta conectar
-        if ( ! $ext->dbh || ! empty( $ext->error ) ) {
+        if ( ! $ext_db->dbh || ! empty( $ext_db->error ) ) {
+            $ext_db = null;
             return null;
         }
     }
 
-    return $ext;
+    return $ext_db;
 }
