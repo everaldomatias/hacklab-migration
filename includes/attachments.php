@@ -729,18 +729,72 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
     return $summary;
 }
 
+/**
+ * Normaliza uma URL ou caminho de anexo no conteúdo.
+ * Detecta automaticamente o ID do blog de origem em caminhos multisite e aplica a normalização.
+ *
+ * @param string $path_or_url        O caminho ou URL a ser normalizado.
+ * @param string $new_uploads_base   A URL base dos uploads no site de destino.
+ * @param bool   $strip_sites_prefix Se deve remover o prefixo `/sites/<id>/`.
+ * @return string A URL ou caminho normalizado.
+ */
+function normalize_content_url_for_multisite_attachment( string $path_or_url, string $new_uploads_base, bool $strip_sites_prefix ): string {
+    // Remove esquemas malformados gerados por concatenações erradas anteriores
+    if ( preg_match( '#^(https?):/([^/].*)#', $path_or_url, $matches ) ) {
+        $path_or_url = $matches[1] . '://' . ltrim( $matches[2], '/' );
+    }
+
+    $parsed_url = wp_parse_url( $path_or_url );
+    $path = $parsed_url['path'] ?? $path_or_url;
+
+    $detected_blog_id = null;
+    $path_segment_to_normalize = '';
+
+    // Detecta se a URL possui o padrão de multisite: /wp-content/uploads/sites/X/...
+    if ( preg_match( '#(?:wp-content/)?uploads/sites/(\d+)/(.*)#', $path, $matches ) ) {
+        $detected_blog_id = (int) $matches[1];
+        $path_segment_to_normalize = 'sites/' . $detected_blog_id . '/' . ltrim( $matches[2], '/' );
+    }
+    // Detecta se a URL possui o padrão single site comum: /wp-content/uploads/...
+    elseif ( preg_match( '#(?:wp-content/)?uploads/(.*)#', $path, $matches ) ) {
+        $detected_blog_id = 1;
+        $path_segment_to_normalize = ltrim( $matches[1], '/' );
+    } else {
+        // Se não for uma URL de upload reconhecida, retorna intacta
+        return $path_or_url;
+    }
+
+    $normalized_path = normalize_attached_file_for_single(
+        $path_segment_to_normalize,
+        $detected_blog_id,
+        $strip_sites_prefix
+    );
+
+    // Constrói a URL final apenas unindo a nova base absoluta com o caminho relativo do arquivo.
+    // Como $new_uploads_base já possui scheme e host do site novo, NÃO concatenamos os antigos.
+    return rtrim( $new_uploads_base, '/' ) . '/' . ltrim( $normalized_path, '/' );
+}
+
+/**
+ * Reescreve URLs de imagens dinamicamente dentro do HTML do post.
+ */
 function replace_content_urls( string $html, string $uploads_base, string $new_uploads_base, ?int $remote_blog_id, bool $strip_sites_prefix = false ): string {
+    // 1. Aplica a substituição legada de strtr para garantir que hosts antigos sumam
     $map = build_uploads_url_map( $uploads_base, $new_uploads_base, $remote_blog_id );
     $out = replace_urls_in_content( $html, $map );
 
-    if ( $strip_sites_prefix ) {
-        $escaped = preg_quote( rtrim( $new_uploads_base, '/' ), '#' );
-        $out = preg_replace( "#({$escaped})/sites/\\d+/#", '$1/', $out );
-    }
+    // 2. Busca dinâmica por QUALQUER URL de uploads que sobrou no content.
+    // Isso garante que imagens puxadas do blog 11 dentro de um post do blog 16 sejam encontradas e normalizadas corretamente.
+    // Essa nova RegEx foca diretamente na URL da imagem (incluindo extensões válidas), preservando o restante dos atributos HTML intactos.
+    $upload_url_pattern = '#(?:https?://[^\s"\'<>]*?)?(?:/wp-content/)?uploads/(?:sites/\d+/)?(?:[^\s"\'<>,]+?\.(?:jpe?g|png|gif|webp|svg|bmp|ico|pdf))#i';
 
-    if ( $remote_blog_id && $remote_blog_id > 1 ) {
-        $out = prefix_upload_filename( $out, (int) $remote_blog_id );
-    }
+    $out = preg_replace_callback(
+        $upload_url_pattern,
+        function( $matches ) use ( $new_uploads_base, $strip_sites_prefix ) {
+            return normalize_content_url_for_multisite_attachment( $matches[0], $new_uploads_base, $strip_sites_prefix );
+        },
+        $out
+    );
 
     return $out;
 }
@@ -834,19 +888,8 @@ function rewrite_meta_attachments_value( $value, array $att_map, array $url_map,
             $new_val = strtr( $new_val, $url_map );
         }
 
-        if ( $strip_sites_prefix ) {
-            $new_val = preg_replace( '#/sites/\\d+/#', '/', $new_val );
-
-            if ( $remote_blog_id && $remote_blog_id > 1 ) {
-                $new_val = prefix_upload_filename( $new_val, (int) $remote_blog_id );
-            }
-        } elseif ( $remote_blog_id && strpos( $new_val, 'sites/' . (int) $remote_blog_id . '/' ) === 0 ) {
-        $new_val = ltrim( substr( $new_val, strlen( 'sites/' . (int) $remote_blog_id . '/' ) ), '/' );
-
-        if ( $remote_blog_id > 1 ) {
-            $new_val = prefix_upload_filename( $new_val, (int) $remote_blog_id );
-        }
-    }
+        // Apply the new dynamic normalization for any detected upload paths
+        $new_val = normalize_content_url_for_multisite_attachment( $new_val, get_uploads_baseurl(), $strip_sites_prefix );
 
         return $new_val;
     }
@@ -1043,4 +1086,14 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
     }
 
     return $summary;
+}
+
+/**
+ * Returns the base URL for uploads.
+ *
+ * @return string
+ */
+function get_uploads_baseurl(): string {
+    $uploads = wp_upload_dir();
+    return rtrim( $uploads['baseurl'], '/' );
 }
