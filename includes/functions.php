@@ -848,11 +848,6 @@ function get_remote_posts( array $args = [] ) {
 
     $prepared = $ext->prepare( $sql, ...$params );
 
-    do_action( 'logger', [
-        'context' => 'get_remote_posts() >> $prepared',
-        'data' => $prepared
-    ] );
-
     if ( $fields === 'ids' ) {
         $ids = $ext->get_col( $prepared );
         return array_map( 'intval', $ids ?: [] );
