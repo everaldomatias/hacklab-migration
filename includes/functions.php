@@ -635,6 +635,23 @@ function get_remote_posts( array $args = [] ) {
     $limit_raw = $a['limit'] ?? $a['numberposts'];
     $limit = ( $limit_raw === null || $limit_raw === '' ) ? null : max( 0, (int) $limit_raw );
     $offset = ( $limit !== null && isset( $args['offset'] ) ) ? max( 0, (int) $a['offset'] ) : 0;
+
+    $normalize_list = static function ( $value ): array {
+        if ( is_array( $value ) ) {
+            return array_values( array_filter( array_map( 'trim', $value ), static fn( $v ) => $v !== '' ) );
+        }
+        $parts = array_map( 'trim', explode( ',', (string) $value ) );
+        return array_values( array_filter( $parts, static fn( $v ) => $v !== '' ) );
+    };
+
+    $post_types = $normalize_list( $a['post_type'] );
+    $post_types = $post_types ?: [ (string) $a['post_type'] ];
+    $post_types = array_values( array_filter( array_map( 'sanitize_key', $post_types ), static fn( $v ) => $v !== '' ) );
+
+    if ( empty( $post_types ) ) {
+        $post_types = ['post'];
+    }
+
     $post_status = $a['post_status'] == 'any' ? ['publish', 'pending', 'draft', 'future', 'private'] : $a['post_status'];
 
     $allowed_orderby = ['ID', 'post_date', 'post_title', 'post_modified', 'post_modified_gmt'];
@@ -748,7 +765,7 @@ function get_remote_posts( array $args = [] ) {
         return "{$field} = %s";
     };
 
-    $where_sql[] = $build_in( "{$table_posts_quoted}.post_type",   $a['post_type'],   $params );
+    $where_sql[] = $build_in( "{$table_posts_quoted}.post_type",   $post_types,   $params );
     $where_sql[] = $build_in( "{$table_posts_quoted}.post_status", $post_status, $params );
 
     if ( ! empty( $a['include'] ) ) {
@@ -830,6 +847,11 @@ function get_remote_posts( array $args = [] ) {
     }
 
     $prepared = $ext->prepare( $sql, ...$params );
+
+    do_action( 'logger', [
+        'context' => 'get_remote_posts() >> $prepared',
+        'data' => $prepared
+    ] );
 
     if ( $fields === 'ids' ) {
         $ids = $ext->get_col( $prepared );
