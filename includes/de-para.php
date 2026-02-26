@@ -30,10 +30,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 function load_de_para_rules_from_csv( string $de_csv_path, string $para_csv_path ): array {
     static $cache = [];
 
-    $key = $de_csv_path . '|' . $para_csv_path;
-    $de_mtime = @filemtime( $de_csv_path ) ?: 0;
-    $pa_mtime = @filemtime( $para_csv_path ) ?: 0;
-    $cache_key = $key . '|' . $de_mtime . '|' . $pa_mtime;
+    $cache_key = md5( $de_csv_path . '|' . $para_csv_path );
 
     if ( isset( $cache[ $cache_key ] ) ) {
         return $cache[ $cache_key ];
@@ -131,20 +128,40 @@ function load_de_para_rules_from_csv( string $de_csv_path, string $para_csv_path
  * @param \WP_Post $post
  */
 function apply_de_para_from_csv( \WP_Post $post ): void {
-    $de_path = defined( 'HACKLAB_MIGRATION_DE_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_DE_CSV_PATH : '/files/wp-content/uploads/de.csv';
-    $pa_path = defined( 'HACKLAB_MIGRATION_PARA_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_PARA_CSV_PATH : '/files/wp-content/uploads/para.csv';
+    $source_blog = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
+
+    $uploads_dir = wp_upload_dir();
+    $migration_dir = $uploads_dir['basedir'] . '/hacklab-migration';
+
+    $default_de_path = defined( 'HACKLAB_MIGRATION_DE_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_DE_CSV_PATH : $migration_dir . '/de.csv';
+    $default_pa_path = defined( 'HACKLAB_MIGRATION_PARA_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_PARA_CSV_PATH : $migration_dir . '/para.csv';
+
+    $de_path = $default_de_path;
+    $pa_path = $default_pa_path;
+
+    if ( $source_blog > 0 ) {
+        $blog_de_path = $migration_dir . '/' . $source_blog . '_de.csv';
+        $blog_pa_path = $migration_dir . '/' . $source_blog . '_para.csv';
+
+        if ( file_exists( $blog_de_path ) && file_exists( $blog_pa_path ) ) {
+            $de_path = $blog_de_path;
+            $pa_path = $blog_pa_path;
+        }
+    }
 
     if ( $de_path === '' || $pa_path === '' ) {
         return;
     }
 
     $rules = load_de_para_rules_from_csv( $de_path, $pa_path );
+
     if ( ! $rules ) {
         return;
     }
 
     $source_meta = get_post_meta( $post->ID, '_hacklab_migration_source_meta', true );
     $remote_cpt  = '';
+
     if ( is_array( $source_meta ) ) {
         $remote_cpt = sanitize_key( (string) ( $source_meta['post_type'] ?? '' ) );
     }
