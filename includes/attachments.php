@@ -24,7 +24,6 @@ function import_remote_attachments( array $args = [] ) : array {
     ];
 
     $options = wp_parse_args( $args, $defaults );
-
     $rows = $options['rows'];
 
     $summary = [
@@ -44,8 +43,8 @@ function import_remote_attachments( array $args = [] ) : array {
     $uploads_blog_id = $blog_id;
     $strip_sites_prefix = (bool) $options['force_base_prefix'];
     $uploads = wp_upload_dir();
+    $old_base = (string) $options['uploads_base'];
 
-    // Registrar attachments
     if ( ! $options['dry_run'] ) {
         $att = register_attachments(
             $rows,
@@ -66,161 +65,101 @@ function import_remote_attachments( array $args = [] ) : array {
         $summary['errors']        = array_merge( $summary['errors'], (array) ( $att['errors'] ?? [] ) );
     }
 
-    // Registra featured image
-    foreach( $rows as $row ) {
-        $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
-        $thumb_rid = $post_meta['_thumbnail_id'] ?? null; // Remote thumbnail id
+    $url_map = $old_base !== '' ? build_uploads_url_map( rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id ) : [];
 
-        if ( is_array( $thumb_rid ) ) {
-            $thumb_rid = reset( $thumb_rid );
+    $process_meta_value = static function ( $val ) use ( &$process_meta_value, $summary, $url_map, $blog_id, $strip_sites_prefix, $old_base, $uploads, $uploads_blog_id ) {
+        if ( is_string( $val ) ) {
+            $val = rewrite_meta_attachments_value( $val, $summary['map'], $url_map, $blog_id, $strip_sites_prefix );
+            return replace_content_urls( $val, rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id, $strip_sites_prefix );
         }
 
+        if ( is_array( $val ) ) {
+            $new_arr = [];
+            foreach ( $val as $k => $v ) {
+                $new_arr[ $k ] = $process_meta_value( $v );
+            }
+            return $new_arr;
+        }
+
+        if ( is_object( $val ) ) {
+            $new_obj = new \stdClass();
+            foreach ( get_object_vars( $val ) as $k => $v ) {
+                $new_obj->$k = $process_meta_value( $v );
+            }
+            return $new_obj;
+        }
+
+        return $val;
+    };
+
+    $unique_parent_ids = array_unique( array_column( $rows, 'ID' ) );
+
+    foreach ( $unique_parent_ids as $remote_post_id ) {
+        $remote_post_id = (int) $remote_post_id;
+        if ( $remote_post_id <= 0 ) continue;
+
+        $remote_row = [];
+        foreach ( $rows as $r ) {
+            if ( (int)$r['ID'] === $remote_post_id ) {
+                $remote_row = $r;
+                break;
+            }
+        }
+
+        $local_post_id = ! empty( $options['local_map'] ) && isset( $options['local_map'][$remote_post_id] )
+            ? (int) $options['local_map'][$remote_post_id]
+            : find_local_post( $remote_post_id, $blog_id );
+
+        if ( $local_post_id <= 0 ) continue;
+
+        $post_meta = is_array( $remote_row['post_meta'] ?? null ) ? $remote_row['post_meta'] : [];
+        $thumb_rid = $post_meta['_thumbnail_id'] ?? null;
+        if ( is_array( $thumb_rid ) ) $thumb_rid = reset( $thumb_rid );
         $thumb_rid = (int) $thumb_rid;
 
-        if ( $thumb_rid <= 0 ) {
-            continue;
-        }
-
-        $remote_post_id = (int) ( $row['ID'] ?? 0 );
-
-        if ( $remote_post_id <= 0 ) {
-            continue;
-        }
-
-        // Busca post local
-        $local_post_id = 0;
-
-        if ( ! empty( $options['local_map'] ) && is_array( $options['local_map'] ) ) {
-            $local_post_id = (int) ( $options['local_map'][$remote_post_id] ?? 0 );
-        } else {
-            $local_post_id = find_local_post( $remote_post_id, $blog_id );
-        }
-
-        if ( $local_post_id <= 0 ) {
-            continue;
-        }
-
-        // Buscar o attachment local
-        $thumb_lid = (int) ( $summary['map'][$thumb_rid] ?? 0 ); // Local thumbnail id
+        if ( $thumb_rid > 0 ) {
+            $thumb_lid = (int) ( $summary['map'][$thumb_rid] ?? 0 );
 
             if ( $thumb_lid <= 0 ) {
-                $remote_attached = (string) ( $post_meta['_wp_attached_file'] ?? '' );
-                if ( $remote_attached !== '' ) {
-                    $candidate = normalize_attached_file_for_single( $remote_attached, $uploads_blog_id, $strip_sites_prefix );
-                    $existing = get_posts( [
-                        'post_type'      => 'attachment',
-                        'posts_per_page' => 1,
-                        'post_status'    => 'any',
-                        'meta_key'       => '_wp_attached_file',
-                        'meta_value'     => $candidate,
-                        'fields'         => 'ids',
-                        'no_found_rows'  => true
-                    ] );
-
-                if ( $existing ) {
-                    $thumb_lid = (int) $existing[0];
-                }
+                $thumb_lid = find_local_post( $thumb_rid, $blog_id );
             }
 
-            if ( $thumb_lid <= 0 ) {
-                continue;
+            if ( $thumb_lid > 0 && ! $options['dry_run'] ) {
+                set_post_thumbnail( $local_post_id, $thumb_lid );
+                $summary['thumbnails_set']++;
             }
         }
 
-        if ( ! $options['dry_run'] ) {
-            set_post_thumbnail( $local_post_id, $thumb_lid );
-        }
-
-        $summary['thumbnails_set']++;
-    }
-
-    // Reescrever URLs do content
-    $old_base = (string) $options['uploads_base'];
-
-    if ( ! $options['dry_run'] && $rows ) {
-        $url_map = $old_base !== '' ? build_uploads_url_map( rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id ) : [];
-
-        foreach ( $rows as $row ) {
-            $remote_post_id = (int) ( $row['ID'] ?? 0 );
-            if ( $remote_post_id <= 0 ) {
-                continue;
-            }
-
-            $local_post_id = 0;
-
-            if ( ! empty( $options['local_map'] ) && is_array( $options['local_map'] ) ) {
-                $local_post_id = (int) ( $options['local_map'][ $remote_post_id ] ?? 0 );
-            } else {
-                $local_post_id = find_local_post( $remote_post_id, $blog_id );
-            }
-
-            if ( $local_post_id <= 0 ) {
-                continue;
-            }
-
-            $post_meta = is_array( $row['post_meta'] ?? null ) ? $row['post_meta'] : [];
-            if ( ! $post_meta ) {
-                continue;
-            }
-
-            foreach ( $post_meta as $meta_key => $meta_val ) {
-                if ( strpos( (string) $meta_key, '_hacklab_migration_' ) === 0 ) {
-                    continue;
-                }
-
-                $new_val = rewrite_meta_attachments_value( $meta_val, $summary['map'], $url_map, $blog_id, $strip_sites_prefix );
-                if ( $new_val !== $meta_val ) {
-                    update_post_meta( $local_post_id, $meta_key, $new_val );
-                }
-            }
-        }
-    }
-
-    if ( $old_base === '' ) {
-        $summary['errors'][] = 'Rewrite content: uploads_base ausente';
-    } else {
-        foreach ( $rows as $row ) {
-            $remote_post_id = (int) ( $row['ID'] ?? 0 );
-
-            if ( $remote_post_id <= 0 ) {
-                continue;
-            }
-
-            // Busca post local
-            $local_post_id = 0;
-
-            if ( ! empty( $options['local_map'] ) && is_array( $options['local_map'] ) ) {
-                $local_post_id = (int) ( $options['local_map'][$remote_post_id] ?? 0 );
-            } else {
-                $local_post_id = find_local_post( $remote_post_id, $blog_id );
-            }
-
-            if ( $local_post_id <= 0 ) {
-                continue;
-            }
-
-            $old_content = (string) get_post_field( 'post_content', $local_post_id );
-
-            if ( $old_content === '' ) {
-                continue;
-            }
-
+        $post_obj = get_post( $local_post_id );
+        if ( $post_obj instanceof \WP_Post && $post_obj->post_content !== '' ) {
             $new_content = replace_content_urls(
-                $old_content,
+                $post_obj->post_content,
                 rtrim( $old_base, '/' ),
                 rtrim( $uploads['baseurl'], '/' ),
                 $uploads_blog_id,
                 $strip_sites_prefix
             );
 
-            if ( $new_content !== $old_content ) {
-                if ( ! $options['dry_run'] ) {
-                    wp_update_post( [
-                        'ID' => $local_post_id,
-                        'post_content' => $new_content
-                    ] );
+            if ( $new_content !== $post_obj->post_content && ! $options['dry_run'] ) {
+                wp_update_post( [ 'ID' => $local_post_id, 'post_content' => $new_content ] );
+                $summary['content_rewritten']++;
+            }
+        }
 
-                    $summary['content_rewritten']++;
+        if ( ! $options['dry_run'] ) {
+            $all_meta = get_post_meta( $local_post_id );
+            foreach ( $all_meta as $meta_key => $meta_values ) {
+                if ( strpos( $meta_key, '_hacklab_migration_' ) === 0 || strpos( $meta_key, '_wp_' ) === 0 || $meta_key === '_edit_lock' || $meta_key === '_thumbnail_id' ) {
+                    continue;
+                }
+
+                foreach ( $meta_values as $raw_val ) {
+                    $unserialized = maybe_unserialize( $raw_val );
+                    $updated_val  = $process_meta_value( $unserialized );
+
+                    if ( $updated_val !== $unserialized ) {
+                        update_post_meta( $local_post_id, $meta_key, $updated_val, $unserialized );
+                    }
                 }
             }
         }
