@@ -465,6 +465,16 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
             $attached_file = $candidate;
             break;
         }
+
+        // fallback: procura versão .webp do arquivo
+        $ext = strtolower( pathinfo( $file_abs, PATHINFO_EXTENSION ) );
+        if ( $ext && $ext !== 'webp' ) {
+            $webp_abs = preg_replace( '#\.' . preg_quote( $ext, '#' ) . '$#', '.webp', $file_abs );
+            if ( $webp_abs && file_exists( $webp_abs ) ) {
+                $attached_file = preg_replace( '#\.' . preg_quote( $ext, '#' ) . '$#', '.webp', $candidate );
+                break;
+            }
+        }
     }
 
     if ( $attached_file === '' ) {
@@ -946,7 +956,11 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
 
     $uploads  = wp_upload_dir();
     $new_base = rtrim( $uploads['baseurl'], '/' );
-    $url_map  = build_uploads_url_map( $uploads_base, $new_base, $remote_blog_id );
+
+    $has_sites_segment = (bool) preg_match( '#/sites/\\d+#', $uploads_base );
+    $map_blog_id = ( $has_sites_segment || $remote_blog_id <= 1 ) ? $remote_blog_id : 1;
+
+    $url_map  = build_uploads_url_map( $uploads_base, $new_base, $map_blog_id );
 
     $summary = [ 'content' => 0, 'meta' => 0, 'attachment' => 0, 'errors' => [] ];
 
