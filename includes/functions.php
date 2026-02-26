@@ -890,6 +890,19 @@ function build_uploads_url_map( string $old_base, string $new_base, ?int $remote
 
     $pairs = [];
 
+    // Suporte a URLs servidas por CDN do Jetpack (i0.wp.com/host/path...).
+    $old_parts = wp_parse_url( $old );
+    if ( ! empty( $old_parts['host'] ) ) {
+        $host_path      = $old_parts['host'] . ( $old_parts['path'] ?? '' );
+        $photon_domains = [ 'i0.wp.com', 'i1.wp.com', 'i2.wp.com' ];
+
+        foreach ( $photon_domains as $photon ) {
+            $photon_base = 'https://' . $photon . '/' . ltrim( $host_path, '/' );
+            $pairs[ rtrim( $photon_base, '/' ) ] = $new;
+            $pairs[ '//' . $photon . '/' . ltrim( $host_path, '/' ) ] = $new;
+        }
+    }
+
     if ( $remote_blog_id && $remote_blog_id > 1 ) {
         $pairs["{$old}/sites/{$remote_blog_id}"] = $new;
 
