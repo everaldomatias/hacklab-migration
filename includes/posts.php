@@ -50,7 +50,8 @@ function import_remote_posts( array $args = [] ): array {
         'updated'     => 0,
         'skipped'     => 0,
         'errors'      => [],
-        'rows'        => []
+        'rows'        => [],
+        'map'         => []
     ];
 
     $rows = get_remote_posts( $fetch );
@@ -225,6 +226,8 @@ function import_remote_posts( array $args = [] ): array {
             continue;
         }
 
+        $summary['map'][ $remote_id ] = $local_id;
+
         $actual_post_type = get_post_type( $local_id );
 
         if ( $actual_post_type && ! empty( $options['lang'] ) ) {
@@ -244,15 +247,6 @@ function import_remote_posts( array $args = [] ): array {
 
         // Aplica termos extras da CLI (add/set/rm)
         process_cli_terms( $local_id, $options );
-
-        // Reattach de thumbnail
-        if ( $options['media'] ) {
-            $remote_thumb_id = (int) ($post_meta['_thumbnail_id'][0] ?? 0);
-
-            if ( $remote_thumb_id > 0 ) {
-                process_post_thumbnail_import( $local_id, $remote_thumb_id, $blog_id, $options );
-            }
-        }
 
         // Remove imagem do content caso seja a mesma da imagem destacada do post
         if ( class_exists( '\hacklabr\Utils\Helpers' ) && $actual_post_type !== 'attachment' ) {
@@ -309,18 +303,46 @@ function import_remote_posts( array $args = [] ): array {
  *
  */
 function find_local_post( int $remote_id, int $blog_id = 1 ): int {
-    $q = get_posts( [
-        'post_type'      => get_supported_post_types(),
-        'posts_per_page' => 1,
-        'post_status'    => 'any',
-        'meta_query'     => [
-            ['key' => '_hacklab_migration_source_id',   'value' => $remote_id, 'compare' => '='],
-            ['key' => '_hacklab_migration_source_blog', 'value' => $blog_id,   'compare' => '='],
-        ],
-        'fields'                => 'ids',
-        'no_found_rows'         => true,
-        'update_meta_cache'     => false,
-        'update_post_term_cache'=> false,
-    ] );
-    return $q ? (int) $q[0] : 0;
+    global $wpdb;
+    static $cache = [];
+
+    if ( $remote_id <= 0 ) {
+        return 0;
+    }
+
+    $cache_key = $remote_id . '|' . $blog_id;
+
+    if ( isset( $cache[ $cache_key ] ) ) {
+        return $cache[ $cache_key ];
+    }
+
+    $sql = "
+        SELECT p.ID
+        FROM {$wpdb->posts} p
+        INNER JOIN {$wpdb->postmeta} pm1 ON p.ID = pm1.post_id
+        INNER JOIN {$wpdb->postmeta} pm2 ON p.ID = pm2.post_id
+    ";
+
+    if ( defined( 'ICL_SITEPRESS_VERSION' ) ) {
+        $sql .= " LEFT JOIN {$wpdb->prefix}icl_translations icl ON icl.element_id = p.ID AND icl.element_type = CONCAT('post_', p.post_type) ";
+    }
+
+    $sql .= "
+        WHERE pm1.meta_key = '_hacklab_migration_source_id' AND pm1.meta_value = %d
+          AND pm2.meta_key = '_hacklab_migration_source_blog' AND pm2.meta_value = %d
+    ";
+
+    if ( defined( 'ICL_SITEPRESS_VERSION' ) ) {
+        $sql .= " AND (icl.language_code IS NULL OR icl.language_code = 'pt-br') ";
+    }
+
+    $sql .= " ORDER BY p.ID ASC LIMIT 1";
+
+    $local_id = (int) $wpdb->get_var( $wpdb->prepare( $sql, $remote_id, $blog_id ) );
+
+    if ( $local_id > 0 ) {
+        $cache[ $cache_key ] = $local_id;
+    }
+
+    return $local_id;
 }

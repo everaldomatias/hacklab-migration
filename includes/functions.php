@@ -1307,33 +1307,6 @@ function set_post_wpml_language( int $post_id, string $post_type, string $lang_c
 }
 
 /**
- * Importa e vincula a imagem destacada
- */
-function process_post_thumbnail_import( int $local_post_id, int $remote_thumb_id, int $blog_id, array $options ) {
-    $local_thumb_id = find_local_post( $remote_thumb_id, $blog_id );
-
-    if ( ! $local_thumb_id ) {
-        $att_info = fetch_remote_attachments_by_ids( [$remote_thumb_id], $blog_id, $options['force_base_prefix'] );
-
-        if ( ! empty( $att_info[$remote_thumb_id] ) ) {
-            $data = $att_info[$remote_thumb_id];
-            $local_thumb_id = register_local_attachments(
-                $data['post'],
-                $data['meta'],
-                $blog_id,
-                $options['run_id'],
-                $blog_id,
-                $options['force_base_prefix']
-            );
-        }
-    }
-
-    if ( $local_thumb_id > 0 ) {
-        set_post_thumbnail( $local_post_id, $local_thumb_id );
-    }
-}
-
-/**
  * Processa termos passados via CLI (add/set/rm).
  * * @param int   $post_id ID do post recém importado/atualizado.
  * @param array $options Array de opções vindo do CLI.

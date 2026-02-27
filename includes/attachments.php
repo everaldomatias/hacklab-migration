@@ -70,7 +70,7 @@ function import_remote_attachments( array $args = [] ) : array {
     $process_meta_value = static function ( $val ) use ( &$process_meta_value, $summary, $url_map, $blog_id, $strip_sites_prefix, $old_base, $uploads, $uploads_blog_id ) {
         if ( is_string( $val ) ) {
             $val = rewrite_meta_attachments_value( $val, $summary['map'], $url_map, $blog_id, $strip_sites_prefix );
-            return replace_content_urls( $val, rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id, $strip_sites_prefix );
+            return replace_content_urls( $val, rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id, $strip_sites_prefix, $summary['map'] );
         }
 
         if ( is_array( $val ) ) {
@@ -121,12 +121,24 @@ function import_remote_attachments( array $args = [] ) : array {
             $thumb_lid = (int) ( $summary['map'][$thumb_rid] ?? 0 );
 
             if ( $thumb_lid <= 0 ) {
-                $thumb_lid = find_local_post( $thumb_rid, $blog_id );
+                global $wpdb;
+                $thumb_lid = (int) $wpdb->get_var( $wpdb->prepare(
+                    "SELECT p.ID FROM {$wpdb->posts} p
+                    INNER JOIN {$wpdb->postmeta} pm1 ON p.ID = pm1.post_id
+                    INNER JOIN {$wpdb->postmeta} pm2 ON p.ID = pm2.post_id
+                    WHERE p.post_type = 'attachment'
+                      AND pm1.meta_key = '_hacklab_migration_source_id' AND pm1.meta_value = %d
+                      AND pm2.meta_key = '_hacklab_migration_source_blog' AND pm2.meta_value = %d
+                    LIMIT 1",
+                    $thumb_rid, $blog_id
+                ) );
             }
 
             if ( $thumb_lid > 0 && ! $options['dry_run'] ) {
                 set_post_thumbnail( $local_post_id, $thumb_lid );
                 $summary['thumbnails_set']++;
+            } elseif ( ! $options['dry_run'] ) {
+                delete_post_meta( $local_post_id, '_thumbnail_id' );
             }
         }
 
@@ -137,7 +149,8 @@ function import_remote_attachments( array $args = [] ) : array {
                 rtrim( $old_base, '/' ),
                 rtrim( $uploads['baseurl'], '/' ),
                 $uploads_blog_id,
-                $strip_sites_prefix
+                $strip_sites_prefix,
+                $summary['map']
             );
 
             if ( $new_content !== $post_obj->post_content && ! $options['dry_run'] ) {
@@ -424,15 +437,16 @@ function register_local_attachments( array $rpost, array $rmeta, ?int $remote_bl
 
     // evita duplicar por attached_file
     $existing = get_posts( [
-        'post_type'      => 'attachment',
-        'posts_per_page' => 1,
-        'post_status'    => 'any',
-        'meta_key'       => '_wp_attached_file',
-        'meta_value'     => $attached_file,
-        'fields'         => 'ids',
-        'no_found_rows'  => true,
+        'post_type'              => 'attachment',
+        'posts_per_page'         => 1,
+        'post_status'            => 'any',
+        'meta_key'               => '_wp_attached_file',
+        'meta_value'             => $attached_file,
+        'fields'                 => 'ids',
+        'no_found_rows'          => true,
         'update_post_term_cache' => false,
         'update_post_meta_cache' => false,
+        'suppress_filters'       => true
     ] );
 
     $att_id = $existing ? (int) $existing[0] : 0;
@@ -595,6 +609,60 @@ function collect_needed_remote_attachments( array $rows, ?int $remote_blog_id, b
     ];
 }
 
+/**
+ * Injeta o prefixo do blog (ex: '11_') nos metadados do anexo,
+ * refletindo a renomeação física feita pelo rsync.
+ */
+function apply_rsync_prefix_to_rmeta( array $rmeta, int $blog_id ): array {
+    // Se for o site principal (1), não há prefixo de rsync a ser aplicado.
+    if ( $blog_id <= 1 ) {
+        return $rmeta;
+    }
+
+    $prefix = $blog_id . '-';
+
+    // Muta o caminho do arquivo principal (_wp_attached_file)
+    if ( ! empty( $rmeta['_wp_attached_file'] ) ) {
+        $file = (string) $rmeta['_wp_attached_file'];
+        // Remove 'sites/ID/' se existir, para trabalharmos com o caminho relativo limpo
+        $file = preg_replace( '#^sites/\d+/#', '', $file );
+
+        $dirname  = dirname( $file );
+        $basename = wp_basename( $file );
+
+        $rmeta['_wp_attached_file'] = ( $dirname !== '.' ? $dirname . '/' : '' ) . $prefix . $basename;
+    }
+
+    // Muta o array gigante de metadados (_wp_attachment_metadata)
+    if ( ! empty( $rmeta['_wp_attachment_metadata'] ) ) {
+        $meta = maybe_unserialize( $rmeta['_wp_attachment_metadata'] );
+
+        if ( is_array( $meta ) ) {
+            // Atualiza a referência base dentro do array
+            if ( ! empty( $meta['file'] ) ) {
+                $file = preg_replace( '#^sites/\d+/#', '', $meta['file'] );
+                $dirname  = dirname( $file );
+                $basename = wp_basename( $file );
+                $meta['file'] = ( $dirname !== '.' ? $dirname . '/' : '' ) . $prefix . $basename;
+            }
+
+            // Atualiza TODAS as miniaturas (sizes)
+            if ( ! empty( $meta['sizes'] ) && is_array( $meta['sizes'] ) ) {
+                foreach ( $meta['sizes'] as $size => $data ) {
+                    if ( ! empty( $data['file'] ) ) {
+                        $meta['sizes'][ $size ]['file'] = $prefix . $data['file'];
+                    }
+                }
+            }
+
+            // Devolve o array mutado (o WP serializa novamente ao salvar no banco)
+            $rmeta['_wp_attachment_metadata'] = $meta;
+        }
+    }
+
+    return $rmeta;
+}
+
 function register_attachments( array $rows, int $remote_blog_id, array $opts = [] ) : array {
     $opts = wp_parse_args( $opts, [
         'chunk'             => 500,
@@ -639,6 +707,7 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
 
             $rpost = $info[$rid]['post'] ?? [];
             $rmeta = $info[$rid]['meta'] ?? [];
+            $rmeta = apply_rsync_prefix_to_rmeta( $rmeta, $remote_blog_id );
 
             // Registra os attachments localmente
             $att_id = register_local_attachments(
@@ -687,8 +756,7 @@ function register_attachments( array $rows, int $remote_blog_id, array $opts = [
  * @param bool   $strip_sites_prefix Se deve remover o prefixo `/sites/<id>/`.
  * @return string A URL ou caminho normalizado.
  */
-function normalize_content_url_for_multisite_attachment( string $path_or_url, string $new_uploads_base, bool $strip_sites_prefix ): string {
-    // Remove esquemas malformados gerados por concatenações erradas anteriores
+function normalize_content_url_for_multisite_attachment( string $path_or_url, string $new_uploads_base, bool $strip_sites_prefix, int $fallback_blog_id = 1 ): string {
     if ( preg_match( '#^(https?):/([^/].*)#', $path_or_url, $matches ) ) {
         $path_or_url = $matches[1] . '://' . ltrim( $matches[2], '/' );
     }
@@ -696,54 +764,94 @@ function normalize_content_url_for_multisite_attachment( string $path_or_url, st
     $parsed_url = wp_parse_url( $path_or_url );
     $path = $parsed_url['path'] ?? $path_or_url;
 
-    $detected_blog_id = null;
-    $path_segment_to_normalize = '';
+    $detected_blog_id = $fallback_blog_id;
+    $relative_path = '';
 
-    // Detecta se a URL possui o padrão de multisite: /wp-content/uploads/sites/X/...
-    if ( preg_match( '#(?:wp-content/)?uploads/sites/(\d+)/(.*)#', $path, $matches ) ) {
+    if ( preg_match( '#uploads/sites/(\d+)/(.*)#', $path, $matches ) ) {
         $detected_blog_id = (int) $matches[1];
-        $path_segment_to_normalize = 'sites/' . $detected_blog_id . '/' . ltrim( $matches[2], '/' );
+        $relative_path = ltrim( $matches[2], '/' ); // Ex: 2026/02/foto.jpg
     }
-    // Detecta se a URL possui o padrão single site comum: /wp-content/uploads/...
-    elseif ( preg_match( '#(?:wp-content/)?uploads/(.*)#', $path, $matches ) ) {
-        $detected_blog_id = 1;
-        $path_segment_to_normalize = ltrim( $matches[1], '/' );
+    elseif ( preg_match( '#uploads/(.*)#', $path, $matches ) ) {
+        $relative_path = ltrim( $matches[1], '/' );
     } else {
-        // Se não for uma URL de upload reconhecida, retorna intacta
         return $path_or_url;
     }
 
-    $normalized_path = normalize_attached_file_for_single(
-        $path_segment_to_normalize,
-        $detected_blog_id,
-        $strip_sites_prefix
-    );
+    if ( $detected_blog_id > 1 ) {
+        $dirname  = dirname( $relative_path );
+        $basename = wp_basename( $relative_path );
 
-    // Constrói a URL final apenas unindo a nova base absoluta com o caminho relativo do arquivo.
-    // Como $new_uploads_base já possui scheme e host do site novo, NÃO concatenamos os antigos.
-    return rtrim( $new_uploads_base, '/' ) . '/' . ltrim( $normalized_path, '/' );
+        $prefix = $detected_blog_id . '-';
+
+        if ( strpos( $basename, $prefix ) !== 0 ) {
+            $basename = $prefix . $basename;
+        }
+
+        $relative_path = ( $dirname !== '.' ? $dirname . '/' : '' ) . $basename;
+    }
+
+    $final_url = rtrim( $new_uploads_base, '/' ) . '/' . ltrim( $relative_path, '/' );
+
+    if ( ! empty( $parsed_url['query'] ) ) {
+        $final_url .= '?' . $parsed_url['query'];
+    }
+
+    return $final_url;
 }
 
 /**
- * Reescreve URLs de imagens dinamicamente dentro do HTML do post.
+ * Reescreve URLs de imagens dinamicamente e atualiza as classes/IDs do Gutenberg (com busca em profundidade).
  */
-function replace_content_urls( string $html, string $uploads_base, string $new_uploads_base, ?int $remote_blog_id, bool $strip_sites_prefix = false ): string {
-    // 1. Aplica a substituição legada de strtr para garantir que hosts antigos sumam
-    $map = build_uploads_url_map( $uploads_base, $new_uploads_base, $remote_blog_id );
+function replace_content_urls( string $html, string $uploads_base, string $new_uploads_base, ?int $remote_blog_id, bool $strip_sites_prefix = false, array $att_map = [] ): string {
+    $map = [];
+    if ( $uploads_base !== '' ) {
+        $map = build_uploads_url_map( $uploads_base, $new_uploads_base, $remote_blog_id );
+    }
+
     $out = replace_urls_in_content( $html, $map );
 
-    // 2. Busca dinâmica por QUALQUER URL de uploads que sobrou no content.
-    // Isso garante que imagens puxadas do blog 11 dentro de um post do blog 16 sejam encontradas e normalizadas corretamente.
-    // Essa nova RegEx foca diretamente na URL da imagem (incluindo extensões válidas), preservando o restante dos atributos HTML intactos.
-    $upload_url_pattern = '#(?:https?://[^\s"\'<>]*?)?(?:/wp-content/)?uploads/(?:sites/\d+/)?(?:[^\s"\'<>,]+?\.(?:jpe?g|png|gif|webp|svg|bmp|ico|pdf))#i';
-
+    // Substitui a URL (src/href)
+    $upload_url_pattern = '#(?:https?://[^\s"\'<>]*?)?(?:/wp-content/)?uploads/(?:sites/\d+/)?(?:[^\s"\'<>,]+?\.[a-zA-Z0-9]{2,5}(?:\?[^\s"\'<>,]*)?)#i';
     $out = preg_replace_callback(
         $upload_url_pattern,
-        function( $matches ) use ( $new_uploads_base, $strip_sites_prefix ) {
-            return normalize_content_url_for_multisite_attachment( $matches[0], $new_uploads_base, $strip_sites_prefix );
+        function( $matches ) use ( $new_uploads_base, $strip_sites_prefix, $remote_blog_id ) {
+            return normalize_content_url_for_multisite_attachment(
+                $matches[0], $new_uploads_base, $strip_sites_prefix, (int) $remote_blog_id
+            );
         },
         $out
     );
+
+    // Extrai todos os IDs velhos (wp-image-XXX) e resolve no banco se não estiver no $att_map
+    if ( preg_match_all( '/wp-image-(\d+)/i', $out, $matches ) ) {
+        $remote_ids_in_content = array_unique( array_map( 'intval', $matches[1] ) );
+        global $wpdb;
+
+        foreach ( $remote_ids_in_content as $rid ) {
+            if ( $rid <= 0 ) continue;
+
+            $lid = (int) ( $att_map[ $rid ] ?? 0 );
+
+            // Se a imagem não foi importada neste chunk, busca direto no banco blindado contra WPML
+            if ( $lid <= 0 ) {
+                $lid = (int) $wpdb->get_var( $wpdb->prepare(
+                    "SELECT p.ID FROM {$wpdb->posts} p
+                    INNER JOIN {$wpdb->postmeta} pm1 ON p.ID = pm1.post_id
+                    INNER JOIN {$wpdb->postmeta} pm2 ON p.ID = pm2.post_id
+                    WHERE p.post_type = 'attachment'
+                      AND pm1.meta_key = '_hacklab_migration_source_id' AND pm1.meta_value = %d
+                      AND pm2.meta_key = '_hacklab_migration_source_blog' AND pm2.meta_value = %d
+                    LIMIT 1",
+                    $rid, $remote_blog_id
+                ) );
+            }
+
+            if ( $lid > 0 && $lid !== $rid ) {
+                $out = str_replace( 'wp-image-' . $rid, 'wp-image-' . $lid, $out );
+                $out = preg_replace( '/("id":\s*)' . $rid . '(\b)/', '${1}' . $lid . '$2', $out );
+            }
+        }
+    }
 
     return $out;
 }
@@ -1049,4 +1157,54 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
 function get_uploads_baseurl(): string {
     $uploads = wp_upload_dir();
     return rtrim( $uploads['baseurl'], '/' );
+}
+
+/**
+ * Injeta o prefixo do blog (ex: '11_') nos metadados do anexo,
+ * refletindo a renomeação física feita pelo rsync.
+ *
+ * @param string $attached_file O valor original de _wp_attached_file (ex: '2023/05/foto.jpg')
+ * @param array  $attachment_meta O array original de _wp_attachment_metadata
+ * @param int    $blog_id O ID do blog de origem
+ * @return array Retorna os dois valores atualizados: ['attached_file' => ..., 'metadata' => ...]
+ */
+function mutate_attachment_metadata_for_rsync( string $attached_file, array $attachment_meta, int $blog_id ): array {
+    $prefix = $blog_id . '_';
+
+    // Atualiza o _wp_attached_file (Ex: '2023/05/foto.jpg' -> '2023/05/11_foto.jpg')
+    $file_dirname  = dirname( $attached_file );
+    $file_basename = wp_basename( $attached_file );
+
+    $new_attached_file = $file_dirname !== '.'
+        ? $file_dirname . '/' . $prefix . $file_basename
+        : $prefix . $file_basename;
+
+    // Atualiza o array _wp_attachment_metadata
+    $new_meta = $attachment_meta;
+
+    // Atualiza a referência principal do arquivo no array
+    if ( ! empty( $new_meta['file'] ) ) {
+        $meta_dirname  = dirname( $new_meta['file'] );
+        $meta_basename = wp_basename( $new_meta['file'] );
+
+        $new_meta['file'] = $meta_dirname !== '.'
+            ? $meta_dirname . '/' . $prefix . $meta_basename
+            : $prefix . $meta_basename;
+    }
+
+    // Atualiza as miniaturas (sizes)
+    if ( ! empty( $new_meta['sizes'] ) && is_array( $new_meta['sizes'] ) ) {
+        foreach ( $new_meta['sizes'] as $size_key => $size_data ) {
+            if ( ! empty( $size_data['file'] ) ) {
+                // Miniaturas no array de sizes guardam apenas o nome do arquivo (sem a pasta)
+                // Ex: 'foto-150x150.jpg' -> '11_foto-150x150.jpg'
+                $new_meta['sizes'][ $size_key ]['file'] = $prefix . $size_data['file'];
+            }
+        }
+    }
+
+    return [
+        'attached_file' => $new_attached_file,
+        'metadata'      => $new_meta
+    ];
 }

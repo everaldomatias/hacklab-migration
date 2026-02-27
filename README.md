@@ -10,7 +10,7 @@
 - Melhora o suporte ao WPML, definindo o idioma padrão ao importar;
 - Remove parâmetro write_mode
 - Adiciona função stop_the_insanity() para melhor a performance das ações no WP local;
-- Corrige bug na função find_local_posts() para pesquisar também no post_type = page.
+- Corrige bug na função find_local_post() para pesquisar também no post_type = page.
 
 0.0.1 - Versão inicial
 
