@@ -575,17 +575,20 @@ function render_local_lookup_page() {
                 'update_post_meta_cache' => true,
                 'update_post_term_cache' => false,
                 'meta_query'             => [
+                    'relation' => 'AND',
                     [
                         'key'     => '_hacklab_migration_source_id',
                         'value'   => $remote_id,
-                        'compare' => '=',
-                        'type'    => 'NUMERIC',
+                        'compare' => '='
                     ],
                     [
                         'key'     => '_hacklab_migration_source_blog',
                         'value'   => $blog_id,
-                        'compare' => '=',
-                        'type'    => 'NUMERIC',
+                        'compare' => '='
+                    ],
+                    [
+                        'key'     => '_icl_lang_duplicate_of',
+                        'compare' => 'NOT EXISTS'
                     ],
                 ],
             ] );

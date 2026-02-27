@@ -426,4 +426,8 @@ function ensure_guest_author_post( \WP_Post $post, array $source_meta = [] ): vo
             'post_status' => 'publish',
         ] );
     }
+
+    if ( function_exists( __NAMESPACE__ . '\\cap_ensure_guest_author_term' ) ) {
+        cap_ensure_guest_author_term( $post->ID, $slug, $display );
+    }
 }

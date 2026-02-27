@@ -290,8 +290,6 @@ function import_remote_coauthors( array $args = [] ): array {
 
         $post_status = in_array( $remote_status, ['publish','draft','pending','private'], true ) ? $remote_status : 'publish';
         $remote_author = (int) ( $row['post_author'] ?? 0 );
-        $post_author = 0;
-
         $post_author = $remote_author ? find_local_user( $remote_author, $blog_id ) : 0;
 
         if ( $post_name === '' ) {
@@ -339,8 +337,6 @@ function import_remote_coauthors( array $args = [] ): array {
 
         if ( ! empty( $post_meta['_edit_last'] ) ) {
             $remote_user_id = (int) $post_meta['_edit_last'];
-            $local_user_id = 0;
-
             $local_user_id = find_local_user( $remote_user_id, $blog_id );
 
             if ( ! $local_user_id ) {
@@ -403,8 +399,12 @@ function import_remote_coauthors( array $args = [] ): array {
             $summary['imported']++;
         }
 
-        if ( ! isset( $local_id ) ) {
+        if ( ! isset( $local_id ) || $local_id <= 0 ) {
             continue;
+        }
+
+        if ( $post_type === 'guest-author' ) {
+            cap_ensure_guest_author_term( $local_id, $post_name, (string) $row['post_title'] );
         }
 
         if ( get_post_meta( $local_id, '_hacklab_migration_source_id', true ) === '' ) {
@@ -427,7 +427,6 @@ function import_remote_coauthors( array $args = [] ): array {
         if ( $options['assign_terms'] ) {
             $row_terms = array_merge( $remote_terms, $local_terms );
 
-            // Co Authors Plus
             if ( cap_instance() && ! empty ( $row_terms['author'] ) ) {
                 cap_assign_coauthors_to_post( $local_id, $row_terms );
                 unset( $row_terms['author'] );
