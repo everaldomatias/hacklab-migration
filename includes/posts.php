@@ -279,6 +279,12 @@ function import_remote_posts( array $args = [] ): array {
             call_user_func( $options['fn_pos'], $local_id, $row, $is_update, $options['dry_run'] );
         }
 
+        restore_post_modification_date(
+            $local_id,
+            (string) ( $row['post_modified'] ?? '' ),
+            (string) ( $row['post_modified_gmt'] ?? '' )
+        );
+
         if ( $index > 0 && $index % 50 === 0 ) {
             stop_the_insanity();
         }

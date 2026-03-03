@@ -156,6 +156,12 @@ function import_remote_attachments( array $args = [] ) : array {
             if ( $new_content !== $post_obj->post_content && ! $options['dry_run'] ) {
                 wp_update_post( [ 'ID' => $local_post_id, 'post_content' => $new_content ] );
                 $summary['content_rewritten']++;
+
+                restore_post_modification_date(
+                    $local_post_id,
+                    (string) ( $remote_row['post_modified'] ?? '' ),
+                    (string) ( $remote_row['post_modified_gmt'] ?? '' )
+                );
             }
         }
 
@@ -1035,6 +1041,8 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
                 if ( is_wp_error( $result ) ) {
                     $all_steps_ok = false;
                     $summary['errors'][] = $result->get_error_message();
+                } else {
+                    restore_post_modification_date( $post_id, $post->post_modified, $post->post_modified_gmt );
                 }
             }
 

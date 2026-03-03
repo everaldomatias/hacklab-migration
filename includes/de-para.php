@@ -425,6 +425,8 @@ function ensure_guest_author_post( \WP_Post $post, array $source_meta = [] ): vo
             'post_name'   => $slug,
             'post_status' => 'publish',
         ] );
+
+        restore_post_modification_date( $post->ID, $post->post_modified, $post->post_modified_gmt );
     }
 
     if ( function_exists( __NAMESPACE__ . '\\cap_ensure_guest_author_term' ) ) {

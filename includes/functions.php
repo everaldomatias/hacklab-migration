@@ -1400,3 +1400,42 @@ function resolve_term_ids( $terms_input, string $taxonomy ): array {
 
     return array_values( array_unique( $clean_ids ) );
 }
+
+/**
+ * Restaura a data de modificação de um post via SQL direto,
+ * contornando o wp_update_post que sempre sobrescreve com a data atual.
+ *
+ * @param int         $post_id      O ID do post local.
+ * @param string|null $modified     A data post_modified (Y-m-d H:i:s).
+ * @param string|null $modified_gmt A data post_modified_gmt (Y-m-d H:i:s).
+ */
+function restore_post_modification_date( int $post_id, ?string $modified, ?string $modified_gmt ): void {
+    if ( $post_id <= 0 || ( empty( $modified ) && empty( $modified_gmt ) ) ) {
+        return;
+    }
+
+    global $wpdb;
+
+    $data   = [];
+    $format = [];
+
+    if ( ! empty( $modified ) ) {
+        $data['post_modified'] = $modified;
+        $format[] = '%s';
+    }
+
+    if ( ! empty( $modified_gmt ) ) {
+        $data['post_modified_gmt'] = $modified_gmt;
+        $format[] = '%s';
+    }
+
+    $wpdb->update(
+        $wpdb->posts,
+        $data,
+        [ 'ID' => $post_id ],
+        $format,
+        [ '%d' ]
+    );
+
+    clean_post_cache( $post_id );
+}
