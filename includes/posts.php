@@ -258,10 +258,7 @@ function import_remote_posts( array $args = [] ): array {
                 $content_raw = $postarr['post_content'] ?? '';
 
                 if ( ! empty( $content_raw ) ) {
-                    $new_content = \hacklabr\Utils\Helpers::remove_featured_image_from_content(
-                        $content_raw,
-                        $current_thumb_id
-                    );
+                    $new_content = \hacklabr\Utils\Helpers::remove_featured_image_from_content( get_post( $local_id ) );
 
                     if ( $new_content !== $content_raw ) {
                         wp_update_post( [

@@ -11,6 +11,139 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+/**
+ * Helper central para processar argumentos e flags do WP-CLI.
+ * Retorna um array estruturado com ['fetch' => ..., 'options' => ...].
+ */
+function parse_args( array $assoc_args, array $default_fetch = [], array $default_options = [] ): array {
+    $fetch = wp_parse_args( $default_fetch, [
+        'post_type'   => 'post',
+        'post_status' => 'publish',
+        'numberposts' => 10,
+        'offset'      => 0,
+        'orderby'     => 'post_date',
+        'order'       => 'DESC'
+    ] );
+
+    $options = wp_parse_args( $default_options, [
+        'meta_ops'          => [],
+        'term_add'          => [],
+        'term_set'          => [],
+        'term_rm'           => [],
+        'target_post_type'  => '',
+        'lang'              => '',
+        'search_replace'    => [],
+        'chunk'             => 500,
+        'dry_run'           => false,
+        'with_media'        => true,
+        'fn_pre'            => '',
+        'fn_pos'            => '',
+        'uploads_base'      => '',
+        'force_base_prefix' => false,
+        'run_id'            => 0
+    ] );
+
+    $tax_query_clauses  = [];
+    $tax_query_relation = 'AND';
+
+    foreach ( $assoc_args as $argument_name => $argument_value ) {
+        $argument_value = is_string( $argument_value ) ? str_replace( '+', ' ', $argument_value ) : $argument_value;
+
+        if ( strpos( $argument_name, 'meta:' ) === 0 ) {
+            $options['meta_ops'][ sanitize_key( substr( $argument_name, 5 ) ) ] = $argument_value; continue;
+        }
+        if ( strpos( $argument_name, 'add:' ) === 0 ) {
+            $options['term_add'][ sanitize_key( substr( $argument_name, 4 ) ) ] = Helpers::csv_or_scalar( $argument_value ); continue;
+        }
+        if ( strpos( $argument_name, 'set:' ) === 0 ) {
+            $options['term_set'][ sanitize_key( substr( $argument_name, 4 ) ) ] = Helpers::csv_or_scalar( $argument_value ); continue;
+        }
+        if ( strpos( $argument_name, 'rm:' ) === 0 ) {
+            $options['term_rm'][ sanitize_key( substr( $argument_name, 3 ) ) ] = Helpers::csv_or_scalar( $argument_value ); continue;
+        }
+        if ( strpos( $argument_name, 'post_type:' ) === 0 ) {
+            $options['target_post_type'] = sanitize_key( substr( $argument_name, 10 ) ); continue;
+        }
+        if ( $argument_name === 'lang' ) {
+            $options['lang'] = $argument_value; continue;
+        }
+        if ( $argument_name === 'search-replace' ) {
+            $pairs = explode( ',', $argument_value );
+            foreach( $pairs as $pair ) {
+                list( $old, $new ) = explode( '=', $pair );
+                $options['search_replace'][$old] = $new;
+            }
+            continue;
+        }
+
+        if ( strpos( $argument_name, 'q:' ) === 0 ) {
+            $key = substr( $argument_name, 2 );
+
+            switch ( $key ) {
+                case 'tax_query':
+                    $parts = array_filter( array_map( 'trim', explode( ';', (string) $argument_value ) ) );
+                    foreach ( $parts as $tax_query_part ) {
+                        [ $taxonomy, $terms_str ] = array_pad( explode( ':', $tax_query_part, 2 ), 2, '' );
+                        $terms = array_filter( array_map( 'trim', explode( ',', (string) $terms_str ) ) );
+                        if ( trim( $taxonomy ) !== '' && $terms ) {
+                            $tax_query_clauses[] = [ 'taxonomy' => trim( $taxonomy ), 'field' => 'slug', 'terms' => $terms ];
+                        }
+                    }
+                    break;
+                case 'relation':
+                    $rel = strtoupper( (string) $argument_value );
+                    $tax_query_relation = in_array( $rel, [ 'AND', 'OR' ], true ) ? $rel : 'AND';
+                    break;
+                case 'post_type':
+                case 'post_status':
+                    $fetch[ $key ] = Helpers::csv_or_scalar( $argument_value );
+                    break;
+                case 'numberposts':
+                case 'limit':
+                case 'offset':
+                case 'id_gte':
+                case 'id_lte':
+                case 'blog_id':
+                    $fetch[ $key ] = max( 0, (int) $argument_value );
+                    break;
+                case 'include':
+                case 'exclude':
+                    $fetch[ $key ] = Helpers::csv_ints( $argument_value );
+                    break;
+                default:
+                    $fetch[ $key ] = $argument_value;
+                    break;
+            }
+            continue;
+        }
+
+        switch ( $argument_name ) {
+            case 'chunk':             $options['chunk'] = max( 1, (int) $argument_value ); break;
+            case 'dry_run':           $options['dry_run'] = Helpers::to_bool( $argument_value ?? true ); break;
+            case 'media':             $options['with_media'] = Helpers::to_bool( $argument_value, true ); break;
+            case 'fn_pre':            $options['fn_pre'] = (string) $argument_value; break;
+            case 'fn_pos':            $options['fn_pos'] = (string) $argument_value; break;
+            case 'uploads_base':      $options['uploads_base'] = (string) $argument_value; break;
+            case 'force_base_prefix': $options['force_base_prefix'] = Helpers::to_bool( $argument_value ?? true ); break;
+        }
+    }
+
+    if ( $fetch['post_status'] === 'any' ) {
+        $fetch['post_status'] = ['publish', 'pending', 'draft', 'future', 'private'];
+    }
+
+    if ( $tax_query_clauses ) {
+        $fetch['tax_query'] = count( $tax_query_clauses ) === 1
+            ? $tax_query_clauses[0]
+            : array_merge( [ 'relation' => $tax_query_relation ], $tax_query_clauses );
+    }
+
+    return [
+        'fetch'   => $fetch,
+        'options' => $options
+    ];
+}
+
 function run_import( array $args = [] ) : array {
     $defaults = [
         'attachments_chunk' => 500,
@@ -1438,4 +1571,45 @@ function restore_post_modification_date( int $post_id, ?string $modified, ?strin
     );
 
     clean_post_cache( $post_id );
+}
+
+/**
+ * Achata metadados corrompidos que foram salvos como array ou geraram linhas duplicadas.
+ *
+ * @param int    $post_id  ID do post local.
+ * @param string $meta_key A chave do metadado (ex: '_hacklab_migration_source_blog').
+ * @return mixed Retorna o valor corrigido, ou false se não precisar/não conseguir corrigir.
+ */
+function flatten_meta( int $post_id, string $meta_key ) {
+    $values = get_post_meta( $post_id, $meta_key, false );
+
+    if ( empty( $values ) ) {
+        return false;
+    }
+
+    $needs_fix  = false;
+    $flat_value = null;
+
+    if ( count( $values ) > 1 ) {
+        $needs_fix = true;
+    }
+
+    foreach ( $values as $v ) {
+        if ( is_array( $v ) ) {
+            $needs_fix = true;
+            $v = reset( $v );
+        }
+
+        if ( is_scalar( $v ) && (string) $v !== '' && $flat_value === null ) {
+            $flat_value = $v;
+        }
+    }
+
+    if ( $needs_fix && $flat_value !== null ) {
+        delete_post_meta( $post_id, $meta_key );
+        add_post_meta( $post_id, $meta_key, $flat_value );
+        return $flat_value;
+    }
+
+    return false;
 }

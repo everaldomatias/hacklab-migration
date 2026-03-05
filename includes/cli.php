@@ -1129,55 +1129,34 @@ class Commands {
             \WP_CLI::error( '<blog_id> deve ser um inteiro positivo.' );
         }
 
-        $post_type   = 'any';
-        $include_ids = [];
-
-        foreach ( $command_args as $name => $value ) {
-            if ( strpos( $name, 'q:' ) === 0 ) {
-                $key = substr( $name, 2 );
-                if ( $key === 'post_type' ) {
-                    $post_type = self::csv_or_scalar( $value );
-                }
-
-                if ( $key === 'include' ) {
-                    $include_ids = self::csv_ints( $value );
-                }
-
-                if ( $key === 'uploads_base' ) {
-                    if ( is_string( $value ) && $value !== '' ) {
-                        $options['uploads_base'] = $value;
-                    }
-                }
-            }
-
-            if ( in_array( $name, [ 'uploads_base', 'old-uploads-base' ], true ) && is_string( $value ) && $value !== '' ) {
-                $options['uploads_base'] = $value;
-            }
-        }
-
-        $dry_run           = \WP_CLI\Utils\get_flag_value( $command_args, 'dry_run', false );
-        $force_base_prefix = \WP_CLI\Utils\get_flag_value( $command_args, 'force_base_prefix', false );
+        $parsed  = parse_args( $command_args );
+        $options = $parsed['options'];
+        $fetch   = $parsed['fetch'];
 
         $query_args = [
-            'post_type'  => $post_type,
-            'post_status'=> 'any',
-            'meta_query' => [
+            'post_type'              => $fetch['post_type'] ?? 'any',
+            'post_status'            => 'any',
+            'meta_query'             => [
                 [
                     'key'     => '_hacklab_migration_source_blog',
                     'value'   => $blog_id,
                     'compare' => '=',
                 ],
             ],
-            'posts_per_page'        => -1,
-            'fields'                => 'ids',
-            'no_found_rows'         => true,
-            'update_post_meta_cache'=> false,
-            'update_post_term_cache'=> false,
+            'posts_per_page'         => $fetch['numberposts'] ?? 10,
+            'fields'                 => 'ids',
+            'no_found_rows'          => true,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
         ];
 
-        if ( $include_ids ) {
-            $query_args['post__in'] = $include_ids;
+        if ( ! empty( $fetch['include'] ) ) {
+            $query_args['post__in'] = $fetch['include'];
             $query_args['orderby']  = 'post__in';
+        }
+
+        if ( ! empty( $fetch['offset'] ) ) {
+            $query_args['offset'] = $fetch['offset'];
         }
 
         $post_ids = get_posts( $query_args );
@@ -1187,33 +1166,32 @@ class Commands {
             return;
         }
 
-        $run_id = $dry_run ? 0 : next_import_run_id();
+        $run_id = $options['dry_run'] ? 0 : next_import_run_id();
 
         $stats = [
-            'total'      => count( $post_ids ),
-            'attached'   => 0,
-            'registered' => 0,
-            'skipped'    => 0,
-            'missing'    => 0,
-            'rew_content'=> 0,
-            'rew_meta'   => 0,
-            'rew_attach' => 0,
+            'total'            => count( $post_ids ),
+            'attached'         => 0,
+            'already_attached' => 0,
+            'registered'       => 0,
+            'skipped'          => 0,
+            'missing'          => 0,
+            'rew_content'      => 0,
+            'rew_meta'         => 0,
+            'rew_attach'       => 0,
         ];
 
         \WP_CLI::log( sprintf( 'Processando %d posts...', $stats['total'] ) );
 
         foreach ( $post_ids as $post_id ) {
-            $remote_thumb_id = (int) get_post_meta( $post_id, '_thumbnail_id', true );
+            $remote_thumb_id = 0;
+            $source_meta = get_post_meta( $post_id, '_hacklab_migration_source_meta', true );
 
-            if ( $remote_thumb_id <= 0 ) {
-                $source_meta = get_post_meta( $post_id, '_hacklab_migration_source_meta', true );
-                if ( is_array( $source_meta ) && ! empty( $source_meta['_thumbnail_id'] ) ) {
-                    $candidate = $source_meta['_thumbnail_id'];
-                    if ( is_array( $candidate ) ) {
-                        $candidate = reset( $candidate );
-                    }
-                    $remote_thumb_id = (int) $candidate;
+            if ( is_array( $source_meta ) && ! empty( $source_meta['_thumbnail_id'] ) ) {
+                $candidate = $source_meta['_thumbnail_id'];
+                if ( is_array( $candidate ) ) {
+                    $candidate = reset( $candidate );
                 }
+                $remote_thumb_id = (int) $candidate;
             }
 
             if ( $remote_thumb_id <= 0 ) {
@@ -1221,40 +1199,24 @@ class Commands {
                 continue;
             }
 
-            $attachment_id = 0;
+            $post_blog_id = (int) get_post_meta( $post_id, '_hacklab_migration_source_blog', true );
+            $post_blog_id = $post_blog_id > 0 ? $post_blog_id : $blog_id;
 
-            $existing = get_post( $remote_thumb_id );
-            if ( $existing instanceof \WP_Post && $existing->post_type === 'attachment' ) {
-                $attachment_id = (int) $existing->ID;
-            }
+            $attachment_id = find_local_post( $remote_thumb_id, $post_blog_id );
 
-            if ( $attachment_id <= 0 ) {
-                $found = get_posts( [
-                    'post_type'      => 'attachment',
-                    'post_status'    => 'any',
-                    'posts_per_page' => 1,
-                    'meta_query'     => [
-                        [ 'key' => '_hacklab_migration_source_id',   'value' => $remote_thumb_id, 'compare' => '=' ],
-                        [ 'key' => '_hacklab_migration_source_blog', 'value' => $blog_id,         'compare' => '=' ],
-                    ],
-                    'fields'                => 'ids',
-                    'no_found_rows'         => true,
-                    'update_post_meta_cache'=> false,
-                    'update_post_term_cache'=> false,
-                ] );
-
-                if ( $found ) {
-                    $attachment_id = (int) $found[0];
-                }
-            }
+            $current_thumb_id = (int) get_post_thumbnail_id( $post_id );
 
             if ( $attachment_id > 0 ) {
-                if ( ! $dry_run ) {
-                    set_post_thumbnail( $post_id, $attachment_id );
+                if ( $current_thumb_id === $attachment_id ) {
+                    $stats['already_attached']++;
+                } else {
+                    if ( ! $options['dry_run'] ) {
+                        set_post_thumbnail( $post_id, $attachment_id );
+                    }
+                    $stats['attached']++;
                 }
-                $stats['attached']++;
             } else {
-                $info = fetch_remote_attachments_by_ids( [ $remote_thumb_id ], $blog_id, $force_base_prefix );
+                $info = fetch_remote_attachments_by_ids( [ $remote_thumb_id ], $post_blog_id, $options['force_base_prefix'] );
 
                 if ( empty( $info[ $remote_thumb_id ] ) ) {
                     $stats['missing']++;
@@ -1264,16 +1226,19 @@ class Commands {
                         $post_id
                     ) );
                 } else {
-                    if ( $dry_run ) {
+                    if ( $options['dry_run'] ) {
                         $stats['registered']++;
                     } else {
+                        $data = $info[ $remote_thumb_id ];
+                        $data['meta'] = apply_rsync_prefix_to_rmeta( $data['meta'], $post_blog_id );
+
                         $att_id = register_local_attachments(
-                            $info[ $remote_thumb_id ]['post'] ?? [],
-                            $info[ $remote_thumb_id ]['meta'] ?? [],
-                            $blog_id,
+                            $data['post'] ?? [],
+                            $data['meta'] ?? [],
+                            $post_blog_id,
                             $run_id,
-                            $blog_id,
-                            $force_base_prefix
+                            $post_blog_id,
+                            $options['force_base_prefix']
                         );
 
                         if ( $att_id > 0 ) {
@@ -1301,9 +1266,9 @@ class Commands {
                 $rewrite = rewrite_post_media_urls(
                     $post_id,
                     $post_uploads_base,
-                    $blog_id,
-                    (bool) $force_base_prefix,
-                    $dry_run
+                    $post_blog_id,
+                    (bool) $options['force_base_prefix'],
+                    $options['dry_run']
                 );
 
                 $stats['rew_content'] += (int) ( $rewrite['content'] ?? 0 );
@@ -1315,22 +1280,109 @@ class Commands {
         \WP_CLI::line( '' );
         \WP_CLI::line( '==================== REATTACH SUMMARY ====================' );
         \WP_CLI::line( sprintf( 'Posts processados:        %d', $stats['total'] ) );
-        \WP_CLI::line( sprintf( 'Thumbnails reatachadas:   %d', $stats['attached'] ) );
+        \WP_CLI::line( sprintf( 'Já estavam reanexadas:        %d', $stats['already_attached'] ) ); // <--- MOSTRA NO RESUMO
+        \WP_CLI::line( sprintf( 'Thumbnails reanexados:   %d', $stats['attached'] ) );
         \WP_CLI::line( sprintf( 'Attachments registrados:  %d', $stats['registered'] ) );
         \WP_CLI::line( sprintf( 'Ignorados (sem thumb):    %d', $stats['skipped'] ) );
         \WP_CLI::line( sprintf( 'Falhas/missing:           %d', $stats['missing'] ) );
-        if ( ! empty( $options['uploads_base'] ) ) {
+        if ( ! empty( $options['uploads_base'] ) || $stats['rew_content'] > 0 ) {
             \WP_CLI::line( sprintf( 'Conteúdos reescritos:     %d', $stats['rew_content'] ) );
             \WP_CLI::line( sprintf( 'Metas reescritas:         %d', $stats['rew_meta'] ) );
             \WP_CLI::line( sprintf( 'Metas de attachment:      %d', $stats['rew_attach'] ) );
         }
         \WP_CLI::line( '=========================================================' );
 
-        if ( $dry_run ) {
+        if ( $options['dry_run'] ) {
             \WP_CLI::success( 'Dry-run concluído (nenhuma alteração gravada).' );
         } else {
             \WP_CLI::success( 'Reattach concluído.' );
         }
+    }
+
+    /**
+     * Achata e corrige metadados que foram salvos como arrays ou com múltiplas linhas (duplicados) no banco de dados.
+     *
+     * ## OPTIONS
+     *
+     * [--keys=<keys>]
+     * : Lista de meta keys para inspecionar e corrigir, separadas por vírgula.
+     * Se omitido, utiliza as chaves padrão definidas internamente.
+     *
+     * [--q:include=<ids>]
+     * : Lista de IDs de posts a serem inspecionados (separados por vírgula).
+     *
+     * [--<field>=<value>]
+     * : Parâmetro coringa para aceitar outras queries dinâmicas do helper (ex: --q:post_type).
+     *
+     * [--dry_run]
+     * : Simula a correção exibindo o que seria alterado, sem gravar nada no banco.
+     *
+     * ## EXAMPLES
+     *
+     * wp flatten-meta
+     * wp flatten-meta --keys=meu_metadado_customizado,outra_chave
+     * wp flatten-meta --keys=views_count --q:include=81833
+     * wp flatten-meta --keys=campo_corrompido --dry_run
+     */
+    function cmd_flatten_meta( $args, $assoc_args ) {
+        global $wpdb;
+
+        $parsed  = parse_args( $assoc_args );
+        $options = $parsed['options'];
+        $fetch   = $parsed['fetch'];
+
+        $keys_arg = \WP_CLI\Utils\get_flag_value( $assoc_args, 'keys', '' );
+        $meta_keys = $keys_arg ? array_map( 'trim', explode( ',', $keys_arg ) ) : [
+            '_hacklab_migration_source_blog',
+            '_hacklab_migration_source_id',
+            '_hacklab_migration_import_run_id',
+            '_hacklab_migration_source_post_type',
+        ];
+
+        \WP_CLI::line();
+        \WP_CLI::log( "Iniciando varredura por metadados corrompidos..." );
+
+        $total_fixed = 0;
+
+        foreach ( $meta_keys as $meta_key ) {
+            \WP_CLI::log( "=> Inspecionando chave: {$meta_key}" );
+
+            // Criação da query dinâmica para buscar posts que precisam de correção
+            $sql_serialized = "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value LIKE 'a:%%'";
+            $sql_duplicates = "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s GROUP BY post_id HAVING COUNT(*) > 1";
+
+            // SE O USUÁRIO PASSAR FILTROS (ex: --q:include=15,20), PODEMOS INCREMENTAR AQUI!
+            if ( ! empty( $fetch['include'] ) ) {
+                $ids = implode( ',', array_map( 'intval', $fetch['include'] ) );
+                $sql_serialized .= " AND post_id IN ($ids)";
+                $sql_duplicates .= " AND post_id IN ($ids)";
+            }
+
+            $serialized_rows = $wpdb->get_col( $wpdb->prepare( $sql_serialized, $meta_key ) );
+            $duplicate_rows  = $wpdb->get_col( $wpdb->prepare( $sql_duplicates, $meta_key ) );
+
+            $affected_post_ids = array_unique( array_merge( $serialized_rows, $duplicate_rows ) );
+
+            if ( empty( $affected_post_ids ) ) {
+                \WP_CLI::success( "Nenhuma anomalia para {$meta_key}." );
+                continue;
+            }
+
+            foreach ( $affected_post_ids as $post_id ) {
+                if ( $options['dry_run'] ) {
+                    \WP_CLI::log( "   - Post {$post_id}: [Simulação] Seria corrigido." );
+                    $total_fixed++;
+                } else {
+                    $fixed_value = flatten_meta( $post_id, $meta_key );
+                    if ( $fixed_value !== false ) {
+                        \WP_CLI::log( "   - Post {$post_id}: Corrigido." );
+                        $total_fixed++;
+                    }
+                }
+            }
+        }
+
+        \WP_CLI::success( "Limpeza concluída! {$total_fixed} iterações." );
     }
 
     // Helpers
