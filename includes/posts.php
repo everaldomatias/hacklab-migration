@@ -212,7 +212,14 @@ function import_remote_posts( array $args = [] ): array {
             unset( $postarr['post_type'] );
 
             $postarr['ID'] = $existing_id;
+
+            wp_suspend_cache_invalidation( false );
+
             $local_id = wp_update_post( $postarr );
+
+            clean_post_cache( $local_id );
+            wp_suspend_cache_invalidation( true );
+
             if ( ! is_wp_error( $local_id ) ) $summary['updated']++;
         } else {
             $local_id = wp_insert_post( $postarr );
