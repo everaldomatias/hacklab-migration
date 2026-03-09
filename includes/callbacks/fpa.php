@@ -210,3 +210,129 @@ function run_callbacks( \WP_Post $post ) {
     set_link_info_url_field( $post );
     set_pdf_field( $post );
 }
+
+/**
+ * Reprocessa o post inteiro em uma única esteira (Divi -> URLs -> Thumbnails -> Limpeza).
+ * Feita especificamente para ser o callback do comando `wp modify-posts`.
+ *
+ * COMANDO CLI:
+ * wp modify-posts q:post_type=post q:include=72457 fn:"hacklabr\Utils\reprocess_post_content"
+ *
+ * @param \WP_Post $post O objeto do post atual no loop do CLI.
+ */
+function reprocess_post_content( \WP_Post $post ): object {
+    $post_id = $post->ID;
+
+    // Recupera dados de origem
+    $post_blog_id = (int) get_post_meta( $post_id, '_hacklab_migration_source_blog', true );
+    $post_blog_id = $post_blog_id > 0 ? $post_blog_id : 1;
+
+    $raw_content = get_post_meta( $post_id, '_hacklab_migration_source_content', true );
+    $content     = ! empty( $raw_content ) ? $raw_content : $post->post_content;
+
+    // Remove tags DIVI -> GUTENBERG
+    if ( function_exists( '\HacklabMigration\remove_divi_tags' ) ) {
+        $content = \HacklabMigration\remove_divi_tags( $content );
+    }
+
+    // Tratamento da imagem destacada
+    $remote_thumb_id = 0;
+    $source_meta = get_post_meta( $post_id, '_hacklab_migration_source_meta', true );
+
+    if ( is_array( $source_meta ) && ! empty( $source_meta['_thumbnail_id'] ) ) {
+        $candidate = $source_meta['_thumbnail_id'];
+        $remote_thumb_id = (int) ( is_array( $candidate ) ? reset( $candidate ) : $candidate );
+    }
+
+    $final_thumb_id = (int) get_post_thumbnail_id( $post_id );
+
+    if ( $remote_thumb_id > 0 ) {
+        $attachment_id = \HacklabMigration\find_local_post( $remote_thumb_id, $post_blog_id );
+
+        if ( $attachment_id > 0 ) {
+            if ( $final_thumb_id !== $attachment_id ) {
+                set_post_thumbnail( $post_id, $attachment_id );
+                $final_thumb_id = $attachment_id;
+            }
+        } else {
+            $info = \HacklabMigration\fetch_remote_attachments_by_ids( [ $remote_thumb_id ], $post_blog_id, true );
+            if ( ! empty( $info[ $remote_thumb_id ] ) ) {
+                $data = $info[ $remote_thumb_id ];
+                $data['meta'] = \HacklabMigration\apply_rsync_prefix_to_rmeta( $data['meta'], $post_blog_id );
+                $run_id = get_post_meta( $post_id, '_hacklab_migration_import_run_id', true );
+
+                $att_id = \HacklabMigration\register_local_attachments(
+                    $data['post'] ?? [],
+                    $data['meta'] ?? [],
+                    $post_blog_id,
+                    $run_id,
+                    $post_blog_id,
+                    true
+                );
+
+                if ( $att_id > 0 ) {
+                    set_post_thumbnail( $post_id, $att_id );
+                    $final_thumb_id = $att_id;
+                }
+            }
+        }
+    }
+
+    // Reescreve as URLs de mídia no content
+    $uploads_base = (string) ( get_post_meta( $post_id, '_hacklab_migration_uploads_base', true ) ?? '' );
+
+    if ( $uploads_base !== '' && function_exists( '\HacklabMigration\replace_content_urls' ) ) {
+        $new_base = HACKLAB_MIGRATION_UPLOADS_BASEURL;
+        $content  = \HacklabMigration\replace_content_urls( $content, $uploads_base, $new_base, $post_blog_id, true );
+    }
+
+    // Remove a imagem destacada do content
+    if ( $final_thumb_id > 0 && ! empty( $content ) ) {
+        $featured_url = wp_get_attachment_url( $final_thumb_id );
+
+        if ( $featured_url ) {
+            $featured_basename = pathinfo( $featured_url, PATHINFO_FILENAME );
+            $featured_basename_clean = preg_replace( '/(-scaled?|-\d+x\d+)+$/i', '', $featured_basename );
+
+            if ( $post_blog_id > 1 ) {
+                $prefix = $post_blog_id . '-';
+                if ( strpos( $featured_basename_clean, $prefix ) === 0 ) {
+                    $featured_basename_clean = substr( $featured_basename_clean, strlen( $prefix ) );
+                }
+            }
+
+            $pattern = '/(?:\s*)?(?:\s*<figure[^>]*>)?\s*<img[^>]+src=["\']([^"\']+)["\'][^>]*>\s*(?:<\/figure>\s*)?(?:\s*)?/is';
+
+            if ( preg_match( $pattern, $content, $matches ) ) {
+                $first_img_url = $matches[1];
+                $first_img_basename = pathinfo( $first_img_url, PATHINFO_FILENAME );
+                $first_img_basename_clean = preg_replace( '/(-scaled?|-\d+x\d+)+$/i', '', $first_img_basename );
+
+                if ( $post_blog_id > 1 ) {
+                    if ( strpos( $first_img_basename_clean, $prefix ) === 0 ) {
+                        $first_img_basename_clean = substr( $first_img_basename_clean, strlen( $prefix ) );
+                    }
+                }
+
+                if ( $featured_basename_clean === $first_img_basename_clean ) {
+                    $cleaned_content = preg_replace( $pattern, '', $content, 1 );
+
+                    if ( $cleaned_content !== null ) {
+                        $cleaned_content = preg_replace( '/<p>\s*(?:<br\s*\/?>|&nbsp;)?\s*<\/p>/i', '', $cleaned_content );
+                        $content = trim( $cleaned_content );
+                    }
+                }
+            }
+        }
+    }
+
+    // Salva o content com as alterações
+    $post->post_content = $content;
+
+    // Verifica metadados (ACF, Galerias, etc)e anexos
+    if ( $uploads_base !== '' && function_exists( '\HacklabMigration\rewrite_post_media_urls' ) ) {
+        \HacklabMigration\rewrite_post_media_urls( $post_id, $uploads_base, $post_blog_id, true, false );
+    }
+
+    return $post;
+}
