@@ -42,7 +42,6 @@ function import_remote_attachments( array $args = [] ) : array {
     $blog_id = max( 1, (int) $options['blog_id'] );
     $uploads_blog_id = $blog_id;
     $strip_sites_prefix = (bool) $options['force_base_prefix'];
-    $uploads = wp_upload_dir();
     $old_base = (string) $options['uploads_base'];
 
     if ( ! $options['dry_run'] ) {
@@ -65,12 +64,12 @@ function import_remote_attachments( array $args = [] ) : array {
         $summary['errors']        = array_merge( $summary['errors'], (array) ( $att['errors'] ?? [] ) );
     }
 
-    $url_map = $old_base !== '' ? build_uploads_url_map( rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id ) : [];
+    $url_map = $old_base !== '' ? build_uploads_url_map( rtrim( $old_base, '/' ), HACKLAB_MIGRATION_UPLOADS_BASEURL, $uploads_blog_id ) : [];
 
-    $process_meta_value = static function ( $val ) use ( &$process_meta_value, $summary, $url_map, $blog_id, $strip_sites_prefix, $old_base, $uploads, $uploads_blog_id ) {
+    $process_meta_value = static function ( $val ) use ( &$process_meta_value, $summary, $url_map, $blog_id, $strip_sites_prefix, $old_base, $uploads_blog_id ) {
         if ( is_string( $val ) ) {
             $val = rewrite_meta_attachments_value( $val, $summary['map'], $url_map, $blog_id, $strip_sites_prefix );
-            return replace_content_urls( $val, rtrim( $old_base, '/' ), rtrim( $uploads['baseurl'], '/' ), $uploads_blog_id, $strip_sites_prefix, $summary['map'] );
+            return replace_content_urls( $val, rtrim( $old_base, '/' ), HACKLAB_MIGRATION_UPLOADS_BASEURL, $uploads_blog_id, $strip_sites_prefix, $summary['map'] );
         }
 
         if ( is_array( $val ) ) {
@@ -147,7 +146,7 @@ function import_remote_attachments( array $args = [] ) : array {
             $new_content = replace_content_urls(
                 $post_obj->post_content,
                 rtrim( $old_base, '/' ),
-                rtrim( $uploads['baseurl'], '/' ),
+                HACKLAB_MIGRATION_UPLOADS_BASEURL,
                 $uploads_blog_id,
                 $strip_sites_prefix,
                 $summary['map']
@@ -1007,8 +1006,7 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
         }
     }
 
-    $uploads  = wp_upload_dir();
-    $new_base = rtrim( $uploads['baseurl'], '/' );
+    $new_base = HACKLAB_MIGRATION_UPLOADS_BASEURL;
 
     $has_sites_segment = (bool) preg_match( '#/sites/\\d+#', $uploads_base );
     $map_blog_id = ( $has_sites_segment || $remote_blog_id <= 1 ) ? $remote_blog_id : 1;
@@ -1159,13 +1157,12 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
 }
 
 /**
- * Returns the base URL for uploads.
+ * Returns the local base URL for uploads.
  *
  * @return string
  */
 function get_uploads_baseurl(): string {
-    $uploads = wp_upload_dir();
-    return rtrim( $uploads['baseurl'], '/' );
+    return HACKLAB_MIGRATION_UPLOADS_BASEURL;
 }
 
 /**

@@ -130,8 +130,7 @@ function load_de_para_rules_from_csv( string $de_csv_path, string $para_csv_path
 function apply_de_para_from_csv( \WP_Post $post ): void {
     $source_blog = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
 
-    $uploads_dir = wp_upload_dir();
-    $migration_dir = $uploads_dir['basedir'] . '/hacklab-migration';
+    $migration_dir = HACKLAB_MIGRATION_UPLOADS_BASEURL . '/hacklab-migration';
 
     $default_de_path = defined( 'HACKLAB_MIGRATION_DE_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_DE_CSV_PATH : $migration_dir . '/de.csv';
     $default_pa_path = defined( 'HACKLAB_MIGRATION_PARA_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_PARA_CSV_PATH : $migration_dir . '/para.csv';

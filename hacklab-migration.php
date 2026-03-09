@@ -74,6 +74,9 @@ define( 'HACKLAB_MIGRATION_DIR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'HACKLAB_MIGRATION_DIR_URL', plugin_dir_url( __FILE__ ) );
 define( 'HACKLAB_MIGRATION_CAP', 'manage_options' );
 
+$uploads = wp_upload_dir();
+define( 'HACKLAB_MIGRATION_UPLOADS_BASEURL', rtrim( $uploads['baseurl'], '/' ) );
+
 add_action( 'plugins_loaded', function () {
     load_plugin_textdomain( 'hacklabr', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 } );
