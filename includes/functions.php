@@ -1310,56 +1310,104 @@ function apply_text_filters( string $content, array $replaces = [], array $row =
  */
 
 function remove_divi_tags( $content ) {
-    /*
-     * 1. Extrai conteúdo interno de [et_pb_text]
-     *    (mantém texto interno, remove o shortcode)
-     */
-    $content = preg_replace(
-        '/\[et_pb_text[^\]]*\](.*?)\[\/et_pb_text\]/mis',
-        '$1',
+    if ( empty( $content ) ) return $content;
+
+    // Wrapper defensivo para evitar NULL e perda de conteúdo
+    $safe_replace_callback = function( $pattern, $callback, $subject ) {
+        $result = preg_replace_callback( $pattern, $callback, $subject );
+        if ( $result === null ) {
+            error_log( 'Falha no regex Divi para Gutenberg. Erro PCRE: ' . preg_last_error() );
+            return $subject;
+        }
+        return $result;
+    };
+
+    $safe_replace = function( $pattern, $replacement, $subject ) {
+        $result = preg_replace( $pattern, $replacement, $subject );
+        return ( $result === null ) ? $subject : $result;
+    };
+
+    // Imagens: [et_pb_image] -> HTML simples (Gutenberg reconhece como imagem)
+    $content = $safe_replace_callback(
+        '/\[et_pb_image\b[^\]]*src="([^"]+)"[^\]]*(?:alt="([^"]*)")?[^\]]*\]/mis',
+        function( $matches ) {
+            $src = $matches[1];
+            $alt = isset($matches[2]) ? $matches[2] : '';
+
+            $safe_src = function_exists('esc_url') ? esc_url($src) : $src;
+            $safe_alt = function_exists('esc_attr') ? esc_attr($alt) : $alt;
+
+            return "\n\n<figure class=\"wp-block-image\"><img src=\"{$safe_src}\" alt=\"{$safe_alt}\"/></figure>\n\n";
+        },
         $content
     );
 
-    /*
-     * 2. Extrai imagens de [et_pb_image ...]
-     *    Mantém todos os atributos.
-     *    Exemplo: [et_pb_image src="x.jpg" alt="y"]
-     *    → <img src="x.jpg" alt="y">
-     */
-    $content = preg_replace(
-        '/\[et_pb_image(.*?)\]/mis',
-        '<img$1>',
+    // 2) Textos e títulos: [et_pb_text] -> mantém HTML limpo e preserva atributos
+    $content = $safe_replace_callback(
+        '/\[et_pb_text\b[^\]]*\](.*?)\[\/et_pb_text\]/mis',
+        function( $matches ) {
+            $inner_content = trim( $matches[1] );
+
+            // Evita wpautop destruir blocos se vier muito “quebrado”
+            if ( function_exists('wpautop') ) {
+                $inner_content = wpautop( $inner_content );
+            }
+
+            // Headings H1..H6 preservando atributos
+            $inner_content = preg_replace_callback(
+                '/<h([1-6])([^>]*)>(.*?)<\/h\1>/is',
+                function( $h ) {
+                    $level = (int) $h[1];
+                    $attrs = isset($h[2]) ? trim($h[2]) : '';
+                    $text  = isset($h[3]) ? trim($h[3]) : '';
+
+                    if ( $text === '' ) return '';
+
+                    // garante espaço antes dos atributos, se existirem
+                    if ( $attrs !== '' && $attrs[0] !== ' ' ) {
+                        $attrs = ' ' . $attrs;
+                    }
+
+                    // ✅ Aqui estava o bug: agora a tag fica correta (ex: <h2 class="western">...)
+                    return "\n\n<h{$level}{$attrs}>{$text}</h{$level}>\n\n";
+                },
+                $inner_content
+            );
+
+            // Parágrafos preservando atributos
+            $inner_content = preg_replace_callback(
+                '/<p([^>]*)>(.*?)<\/p>/is',
+                function( $p ) {
+                    $attrs = isset($p[1]) ? trim($p[1]) : '';
+                    $text  = isset($p[2]) ? trim($p[2]) : '';
+
+                    // remove parágrafos vazios/espacadores
+                    if ( $text === '' || $text === '&nbsp;' ) return '';
+
+                    if ( $attrs !== '' && $attrs[0] !== ' ' ) {
+                        $attrs = ' ' . $attrs;
+                    }
+
+                    return "\n\n<p{$attrs}>{$text}</p>\n\n";
+                },
+                $inner_content
+            );
+
+            return trim($inner_content);
+        },
         $content
     );
 
-    /*
-     * 3. Extrai iframes de [iframe ...] caso você use este shortcode
-     *    Mantém todos os atributos.
-     */
-    $content = preg_replace(
-        '/\[iframe(.*?)\]/mis',
-        '<iframe$1></iframe>',
-        $content
-    );
+    // Remove containers estruturais do Divi
+    $content = $safe_replace('/\[\/?et_pb_(section|row|column)\b[^\]]*\]/mis', '', $content);
 
-    /*
-     * 4. Remove qualquer outro shortcode do Divi
-     *    Pega tudo que começa com [et_pb_ ...]
-     *    Ex: [et_pb_row], [/et_pb_section], [et_pb_button ... /], etc
-     */
-    $content = preg_replace(
-        '/\[\/?et_pb_[^\]]*\]/mis',
-        '',
-        $content
-    );
+    // Fallback: remove shortcodes residuais do Divi (et_pb_*) e mantém o conteúdo fora de shortcodes intacto.
+    $content = $safe_replace('/\[\/?et_pb_[a-z0-9_:-]+\b[^\]]*\]/mis', '', $content);
 
-    /*
-     * 5. Remove sobras de múltiplas quebras de linha causadas pela remoção
-     */
-    $content = preg_replace( '/[\r\n]+/', "\n", $content );
-    $content = trim( $content );
+    // Remove de quebras de linha
+    $content = $safe_replace("/\n\s*\n{3,}/", "\n\n", $content);
 
-    return $content;
+    return trim( $content );
 }
 
 
