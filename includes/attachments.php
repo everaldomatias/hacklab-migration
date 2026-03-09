@@ -1030,19 +1030,20 @@ function rewrite_post_media_urls( int $post_id, string $uploads_base, int $remot
         if ( $new_content !== $old_content ) {
 
             if ( ! $dry_run ) {
-                $result = wp_update_post(
-                    [
-                        'ID'           => $post_id,
-                        'post_content' => $new_content,
-                    ],
-                    true
+                global $wpdb;
+                $saved = $wpdb->update(
+                    $wpdb->posts,
+                    [ 'post_content' => $new_content ],
+                    [ 'ID'           => $post_id ],
+                    [ '%s' ],
+                    [ '%d' ]
                 );
 
-                if ( is_wp_error( $result ) ) {
+                if ( $saved === false ) {
                     $all_steps_ok = false;
-                    $summary['errors'][] = $result->get_error_message();
+                    $summary['errors'][] = 'Falha silenciosa do banco ao gravar post_content.';
                 } else {
-                    restore_post_modification_date( $post_id, $post->post_modified, $post->post_modified_gmt );
+                    clean_post_cache( $post_id );
                 }
             }
 
