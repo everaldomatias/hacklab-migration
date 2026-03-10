@@ -130,25 +130,26 @@ function load_de_para_rules_from_csv( string $de_csv_path, string $para_csv_path
 function apply_de_para_from_csv( \WP_Post $post ): void {
     $source_blog = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
 
-    $migration_dir = HACKLAB_MIGRATION_UPLOADS_BASEURL . '/hacklab-migration';
+    $uploads_dir   = wp_upload_dir();
+    $migration_dir = $uploads_dir['basedir'] . '/hacklab-migration';
 
-    $default_de_path = defined( 'HACKLAB_MIGRATION_DE_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_DE_CSV_PATH : $migration_dir . '/de.csv';
-    $default_pa_path = defined( 'HACKLAB_MIGRATION_PARA_CSV_PATH' ) ? (string) HACKLAB_MIGRATION_PARA_CSV_PATH : $migration_dir . '/para.csv';
-
-    $de_path = $default_de_path;
-    $pa_path = $default_pa_path;
+    $de_path = $migration_dir . '/de.csv';
+    $pa_path = $migration_dir . '/para.csv';
 
     if ( $source_blog > 0 ) {
         $blog_de_path = $migration_dir . '/' . $source_blog . '_de.csv';
         $blog_pa_path = $migration_dir . '/' . $source_blog . '_para.csv';
 
-        if ( file_exists( $blog_de_path ) && file_exists( $blog_pa_path ) ) {
+        if ( file_exists( $blog_de_path ) ) {
             $de_path = $blog_de_path;
+        }
+
+        if ( file_exists( $blog_pa_path ) ) {
             $pa_path = $blog_pa_path;
         }
     }
 
-    if ( $de_path === '' || $pa_path === '' ) {
+    if ( ! file_exists( $de_path ) || ! file_exists( $pa_path ) ) {
         return;
     }
 
