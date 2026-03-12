@@ -547,3 +547,90 @@ function import_remote_coauthors( array $args = [] ): array {
 
     return $summary;
 }
+
+/**
+ * Transmuta um CPT 'authors' existente em 'guest-author' preservando o ID original.
+ *
+ * Recomenda-se importar os posts para o post_type 'migration' e depois rodar o comando modify-posts
+ * wp run-import <blog_id> --q:post_type=author --q:post_status=any --q:numberposts=1000 --post_type=migration --chunk=100 --uploads_base=<source_url>
+ *
+ * COMANDO CLI:
+ * wp modify-posts --q:post_type=migration --fn:"HacklabMigration\\cli_mutate_author_to_coauthor"
+ *
+ * @param \WP_Post $post O objeto do post atual no loop do CLI.
+ */
+function cli_mutate_author_to_coauthor( \WP_Post $post ): void {
+    if ( $post->post_type === 'guest-author' ) {
+        return;
+    }
+
+    $local_id = $post->ID;
+
+    $source_meta = get_post_meta( $local_id, '_hacklab_migration_source_meta', true );
+    if ( ! is_array( $source_meta ) ) {
+        $source_meta = [];
+    }
+
+    if ( function_exists( '\HacklabMigration\ensure_guest_author_post' ) ) {
+        \HacklabMigration\ensure_guest_author_post( $post, $source_meta );
+    }
+
+    $base_slug = sanitize_title(
+        $post->post_name !== '' ? $post->post_name : ( $post->post_title !== '' ? $post->post_title : (string) $local_id )
+    );
+
+    $slug = ( strpos( $base_slug, 'cap-' ) === 0 ) ? $base_slug : 'cap-' . $base_slug;
+
+    if ( function_exists( '\HacklabMigration\cap_ensure_guest_author_term' ) ) {
+        \HacklabMigration\cap_ensure_guest_author_term( $local_id, $slug, (string) $post->post_title );
+    }
+
+    $bio = ! empty( trim( $post->post_excerpt ) ) ? $post->post_excerpt : $post->post_content;
+
+    if ( ! empty( $bio ) ) {
+        update_post_meta( $local_id, 'cap-description', $bio );
+        $post->post_content = $bio;
+    }
+
+    $post->post_type   = 'guest-author';
+    $post->post_status = 'publish';
+    $post->post_name   = $slug;
+}
+
+function cli_assign_migrated_coauthors( \WP_Post $post ): void {
+    $cap = function_exists( 'cap_instance' ) ? cap_instance() : null;
+    if ( ! $cap ) return;
+
+    $blog_id = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
+    if ( $blog_id <= 0 ) $blog_id = 1;
+
+    $remote_authors = get_post_meta( $post->ID, 'authors', true );
+    if ( empty( $remote_authors ) ) return;
+
+    $remote_authors = is_array( $remote_authors ) ? $remote_authors : [ $remote_authors ];
+
+    $coauthors_logins = [];
+
+    foreach ( $remote_authors as $remote_id ) {
+        $local_ga_id = find_local_post( (int) $remote_id, $blog_id );
+
+        if ( $local_ga_id > 0 ) {
+            $ga_post = get_post( $local_ga_id );
+
+            if ( $ga_post && $ga_post->post_type === 'guest-author' ) {
+                $coauthors_logins[] = $ga_post->post_name;
+            }
+        }
+    }
+
+    $coauthors_logins = array_filter( array_unique( $coauthors_logins ) );
+
+    if ( ! empty( $coauthors_logins ) ) {
+        $cap->add_coauthors( $post->ID, $coauthors_logins, false );
+
+        if ( defined( 'WP_CLI' ) && WP_CLI ) {
+            $names = implode( ', ', $coauthors_logins );
+            \WP_CLI::log( "Post {$post->ID}: Co-autores atribuídos: [{$names}]" );
+        }
+    }
+}
