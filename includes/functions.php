@@ -1661,3 +1661,17 @@ function flatten_meta( int $post_id, string $meta_key ) {
 
     return false;
 }
+
+/**
+ * Extrai o primeiro número encontrado em uma string.
+ *
+ * @param string $string Título do post.
+ * @return string O número encontrado ou uma string vazia se não houver números.
+ */
+function extract_number_from_string( string $string ): string {
+    if ( preg_match( '/\d+/', $string, $matches ) ) {
+        return (string) $matches[0];
+    }
+
+    return '';
+}
