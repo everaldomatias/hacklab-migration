@@ -336,3 +336,33 @@ function reprocess_post_content( \WP_Post $post ): object {
 
     return $post;
 }
+
+/**
+ * Procura um número no título do post e o atribui como termo na taxonomia 'edicao'.
+ * * Exemplo: "Revista Edição 123" -> Termo "123" na taxonomia "edicao".
+ *
+ * COMANDO CLI:
+ * wp modify-posts q:post_type=post fn="HacklabMigration\map_title_number_to_edition_tax"
+ *
+ * @param \WP_Post $post Objeto do post fornecido pelo WordPress ou pelo modify-posts.
+ */
+function map_title_number_to_edition_tax( \WP_Post $post ): void {
+    if ( ! $post instanceof \WP_Post ) {
+        return;
+    }
+
+    if ( preg_match( '/\d+/', $post->post_title, $matches ) ) {
+        $edition_number = $matches[0];
+        $result = wp_set_object_terms( $post->ID, $edition_number, 'edicao', false );
+
+        if ( is_wp_error( $result ) ) {
+            if ( defined( 'WP_CLI' ) && WP_CLI ) {
+                do_action( 'logger', "Post {$post->ID}: Erro ao atribuir edição {$edition_number}." );
+            }
+        }
+    } else {
+        if ( defined( 'WP_CLI' ) && WP_CLI ) {
+            do_action( 'logger', "Post {$post->ID}: Nenhum número encontrado no título." );
+        }
+    }
+}
