@@ -366,3 +366,78 @@ function map_title_number_to_edition_tax( \WP_Post $post ): void {
         }
     }
 }
+
+/**
+ * Converte um post em um termo da taxonomia "edicao", copia seus metadados
+ * e reescreve a URL da imagem de capa (wpcf-edicao_lista_capa).
+ * * USO VIA CLI:
+ * wp modify-posts --q:post_type=edicao --fn="HacklabMigration\fpa_convert_post_to_edition_term"
+ *
+ * @param \WP_Post $post Objeto do post atual no loop do CLI.
+ */
+function fpa_convert_post_to_edition_term( \WP_Post $post ): void {
+    $taxonomy  = 'edicao';
+    $term_name = trim( $post->post_title );
+    $term_name = $term_name . ' – Teoria e Debate';
+
+    $source_id   = (int) get_post_meta( $post->ID, '_hacklab_migration_source_id', true );
+    $source_blog = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
+
+    if ( $source_blog <= 0 ) {
+        $source_blog = 1;
+    }
+
+    $existing_terms = get_terms( [
+        'taxonomy'   => $taxonomy,
+        'hide_empty' => false,
+        'fields'     => 'ids',
+        'meta_query' => [
+            'relation' => 'AND',
+            [
+                'key'     => '_hacklab_migration_source_id',
+                'value'   => $source_id,
+                'compare' => '='
+            ],
+            [
+                'key'     => '_hacklab_migration_source_blog',
+                'value'   => $source_blog,
+                'compare' => '='
+            ]
+        ]
+    ] );
+
+    $term_id = 0;
+
+    if ( ! empty( $existing_terms ) && ! is_wp_error( $existing_terms ) ) {
+        // Termo já existe
+        $term_id = (int) $existing_terms[0];
+    } else {
+        // Termo não existe, vamos criar
+        $inserted_term = wp_insert_term( $term_name, $taxonomy );
+
+        if ( is_wp_error( $inserted_term ) ) {
+            // Se falhou porque já existe um termo com este nome (slug collision), tentamos pegar o ID dele
+            if ( isset( $inserted_term->error_data['term_exists'] ) ) {
+                $term_id = (int) $inserted_term->error_data['term_exists'];
+            } else {
+                do_action( 'logger', "Erro ao criar termo {$term_name}: " . $inserted_term->get_error_message() );
+                return;
+            }
+        } else {
+            $term_id = (int) $inserted_term['term_id'];
+        }
+    }
+
+    if ( $term_id <= 0 ) {
+        return;
+    }
+
+    $all_post_meta = get_post_custom( $post->ID );
+
+    foreach ( $all_post_meta as $meta_key => $meta_values ) {
+        foreach ( $meta_values as $meta_value ) {
+            $unserialized_value = maybe_unserialize( $meta_value );
+            update_term_meta( $term_id, $meta_key, $unserialized_value );
+        }
+    }
+}
