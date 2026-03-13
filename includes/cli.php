@@ -1300,6 +1300,312 @@ class Commands {
     }
 
     /**
+     * Registra como attachments locais os arquivos já copiados via rsync que
+     * começam com o prefixo "<blog_id>-" dentro de wp-content/uploads.
+     *
+     * Uso:
+     *   wp sync-rsynced-attachments <blog_id> [--subdir=<rel>] [--dry_run] [--force_base_prefix] [--remote_base=<url>]
+     *
+     * Exemplos:
+     *   wp sync-rsynced-attachments 11
+     *   wp sync-rsynced-attachments 11 --subdir=2024/03
+     *   wp sync-rsynced-attachments 11 --dry_run
+     *
+     * O comando procura por arquivos cujo basename inicia com "<blog_id>-"
+     * (ex: 11-foto.jpg). Se o attachment ainda não existir com
+     * `_wp_attached_file` igual ao caminho relativo encontrado e um
+     * `_hacklab_migration_source_id` vindo do banco remoto; sem ID remoto ele
+     * apenas reporta.
+     * Se encontrar o registro no banco remoto (comparando `_wp_attached_file`
+     * sem o prefixo), copia metadados e `_hacklab_migration_source_id`.
+     */
+    static function cmd_sync_rsynced_attachments( $args, $assoc_args ) {
+        if ( empty( $args[0] ) ) {
+            \WP_CLI::error( 'Informe o <blog_id>. Ex: wp sync-rsynced-attachments 11' );
+        }
+
+        $blog_id = (int) $args[0];
+        if ( $blog_id <= 0 ) {
+            \WP_CLI::error( '<blog_id> deve ser um inteiro positivo.' );
+        }
+
+        $dry_run = self::to_bool( \WP_CLI\Utils\get_flag_value( $assoc_args, 'dry_run', false ) );
+        $force_base_prefix = self::to_bool( \WP_CLI\Utils\get_flag_value( $assoc_args, 'force_base_prefix', false ) );
+        $subdir  = trim( (string) \WP_CLI\Utils\get_flag_value( $assoc_args, 'subdir', '' ), '/\\' );
+        $remote_base = rtrim( (string) \WP_CLI\Utils\get_flag_value( $assoc_args, 'remote_base', '' ), '/' );
+
+        $uploads   = wp_upload_dir();
+        $base_dir  = rtrim( $uploads['basedir'], DIRECTORY_SEPARATOR );
+        $scan_dir  = $base_dir;
+
+        if ( $subdir !== '' ) {
+            $scan_dir = $base_dir . DIRECTORY_SEPARATOR . $subdir;
+            if ( ! is_dir( $scan_dir ) ) {
+                \WP_CLI::error( sprintf( 'Subpasta informada não existe: %s', $scan_dir ) );
+            }
+        }
+
+        \WP_CLI::log( sprintf( 'Procurando arquivos com prefixo %d- em %s', $blog_id, $scan_dir ) );
+
+        $prefix = $blog_id . '-';
+        $stats  = [
+            'scanned'    => 0,
+            'existing'   => 0,
+            'registered' => 0,
+            'registered_remote' => 0,
+            'missing_remote' => 0,
+            'errors'     => 0,
+        ];
+        $missing_files = [];
+
+        $base_dir_slash = trailingslashit( $base_dir );
+
+        $files = [];
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator(
+                $scan_dir,
+                \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::FOLLOW_SYMLINKS
+            )
+        );
+
+        /** @var \SplFileInfo $file */
+        foreach ( $iterator as $file ) {
+            if ( ! $file->isFile() ) {
+                continue;
+            }
+
+            $basename = $file->getFilename();
+            if ( strpos( $basename, $prefix ) !== 0 ) {
+                continue;
+            }
+
+            // Ignora variações de tamanho/scale geradas pelo WP; processa só o arquivo principal.
+            $plain_name = preg_replace( '#^' . preg_quote( $prefix, '#' ) . '#', '', $basename );
+            if ( preg_match( '/-(?:\d+x\d+|scaled)(?=\.[^.]+$)/i', $plain_name ) ) {
+                continue;
+            }
+
+            $abs_path = $file->getPathname();
+            $rel_path = ltrim( str_replace( $base_dir_slash, '', $abs_path ), '/\\' );
+
+            $files[] = [
+                'abs'        => $abs_path,
+                'rel'        => $rel_path,
+                'basename'   => $basename,
+            ];
+        }
+
+        $stats['scanned'] = count( $files );
+
+        // Tenta mapear arquivos locais para IDs remotos, removendo o prefixo <blog_id>-
+        $remote_lookup = [];
+        $remote_info   = [];
+
+        $ext = get_external_wpdb();
+        if ( $ext ) {
+            $creds = get_credentials();
+            $t_posts = resolve_remote_posts_table( $creds, $blog_id, $force_base_prefix );
+            $t_meta  = resolve_remote_postmeta_table( $creds, $blog_id, $force_base_prefix );
+
+            $all_candidates = [];
+            foreach ( $files as $f ) {
+                $dir      = dirname( $f['rel'] );
+                $dir      = $dir === '.' ? '' : $dir;
+                $basename = $f['basename'];
+                $plain    = preg_replace( '#^' . preg_quote( $prefix, '#' ) . '#', '', $basename );
+                $base_path = $dir !== '' ? $dir . '/' . $plain : $plain;
+
+                $variants = [];
+                $variants[] = $base_path;
+                $variants[] = 'sites/' . $blog_id . '/' . $base_path;
+
+                $dot_pos = strrpos( $base_path, '.' );
+                if ( $dot_pos !== false ) {
+                    $name_only = substr( $base_path, 0, $dot_pos );
+                    $ext_only  = substr( $base_path, $dot_pos );
+
+                    $scaled = $name_only . '-scaled' . $ext_only;
+                    $variants[] = $scaled;
+                    $variants[] = 'sites/' . $blog_id . '/' . $scaled;
+
+                    $with_prefix_scaled = $dir !== '' ? $dir . '/' . $blog_id . '-' . basename( $scaled ) : $blog_id . '-' . basename( $scaled );
+                    $variants[] = $with_prefix_scaled;
+                    $variants[] = 'sites/' . $blog_id . '/' . $with_prefix_scaled;
+                }
+
+                foreach ( $variants as $cand ) {
+                    $all_candidates[] = $cand;
+                }
+            }
+
+            $all_candidates = array_values( array_unique( array_filter( $all_candidates, static fn( $v ) => $v !== '' ) ) );
+
+            $chunk_size = 500;
+            for ( $i = 0; $i < count( $all_candidates ); $i += $chunk_size ) {
+                $chunk = array_slice( $all_candidates, $i, $chunk_size );
+                $placeholders = implode( ',', array_fill( 0, count( $chunk ), '%s' ) );
+                $sql = "
+                    SELECT p.ID, pm.meta_value
+                      FROM {$t_posts} p
+                      INNER JOIN {$t_meta} pm ON p.ID = pm.post_id
+                     WHERE p.post_type = 'attachment'
+                       AND pm.meta_key = '_wp_attached_file'
+                       AND pm.meta_value IN ({$placeholders})
+                ";
+
+                $stmt = $ext->prepare( $sql, $chunk );
+                if ( $stmt === null ) {
+                    continue;
+                }
+
+                $rows = $ext->get_results( $stmt, ARRAY_A ) ?: [];
+                foreach ( $rows as $row ) {
+                    $remote_lookup[ (string) $row['meta_value'] ] = (int) $row['ID'];
+                }
+            }
+
+            if ( $remote_lookup ) {
+                $remote_ids = array_values( array_unique( array_filter( $remote_lookup, static fn( $v ) => $v > 0 ) ) );
+                $remote_info = fetch_remote_attachments_by_ids( $remote_ids, $blog_id, $force_base_prefix );
+            }
+        } else {
+            \WP_CLI::warning( 'Banco remoto indisponível; prosseguindo sem copiar metadados/remoto.' );
+        }
+
+        foreach ( $files as $file ) {
+            $rel_path = $file['rel'];
+
+            $existing = get_posts( [
+                'post_type'              => 'attachment',
+                'posts_per_page'         => 1,
+                'post_status'            => 'any',
+                'meta_key'               => '_wp_attached_file',
+                'meta_value'             => $rel_path,
+                'fields'                 => 'ids',
+                'no_found_rows'          => true,
+                'update_post_term_cache' => false,
+                'update_post_meta_cache' => false,
+                'suppress_filters'       => true,
+            ] );
+
+            if ( $existing ) {
+                $stats['existing']++;
+                continue;
+            }
+
+            // Procura ID remoto pelo caminho original (sem prefixo)
+            $dir       = dirname( $rel_path );
+            $dir       = $dir === '.' ? '' : $dir;
+            $basename  = $file['basename'];
+            $plain     = preg_replace( '#^' . preg_quote( $prefix, '#' ) . '#', '', $basename );
+            $base_path = $dir !== '' ? $dir . '/' . $plain : $plain;
+
+            $candidate_keys = [
+                $base_path,
+                'sites/' . $blog_id . '/' . $base_path
+            ];
+
+            // Considera variantes comuns no remoto: nomes com -scaled e tamanhos.
+            $dot_pos = strrpos( $base_path, '.' );
+            if ( $dot_pos !== false ) {
+                $name_only = substr( $base_path, 0, $dot_pos );
+                $ext_only  = substr( $base_path, $dot_pos );
+
+                $scaled = $name_only . '-scaled' . $ext_only;
+                $candidate_keys[] = $scaled;
+                $candidate_keys[] = 'sites/' . $blog_id . '/' . $scaled;
+
+                // Mantém a versão com prefixo remoto (caso o -scaled esteja salvo com prefixo)
+                $with_prefix_scaled = $dir !== '' ? $dir . '/' . $blog_id . '-' . basename( $scaled ) : $blog_id . '-' . basename( $scaled );
+                $candidate_keys[] = $with_prefix_scaled;
+                $candidate_keys[] = 'sites/' . $blog_id . '/' . $with_prefix_scaled;
+            }
+            $candidate_urls = $remote_base !== ''
+                ? array_map(
+                    static fn( $p ) => $remote_base . '/' . ltrim( str_replace( '\\', '/', $p ), '/' ),
+                    $candidate_keys
+                )
+                : $candidate_keys;
+
+            $remote_id = 0;
+            foreach ( $candidate_keys as $ckey ) {
+                if ( isset( $remote_lookup[ $ckey ] ) && $remote_lookup[ $ckey ] > 0 ) {
+                    $remote_id = (int) $remote_lookup[ $ckey ];
+                    break;
+                }
+            }
+
+            if ( $dry_run ) {
+                if ( $remote_id > 0 ) {
+                    $stats['registered']++;
+                    $stats['registered_remote']++;
+                } else {
+                    $stats['missing_remote']++;
+                    $missing_files[] = sprintf( '%s (buscado: %s)', $rel_path, implode( ' | ', $candidate_urls ) );
+                }
+                \WP_CLI::log( sprintf(
+                    '[dry-run] %s (remoto %s)',
+                    $rel_path,
+                    $remote_id > 0 ? "#{$remote_id}" : 'não encontrado'
+                ) );
+                continue;
+            }
+
+            if ( $remote_id <= 0 || ! isset( $remote_info[ $remote_id ] ) ) {
+                $stats['missing_remote']++;
+                $missing_files[] = sprintf( '%s (buscado: %s)', $rel_path, implode( ' | ', $candidate_urls ) );
+                \WP_CLI::warning( sprintf( 'Pulado (remoto não encontrado) %s', $rel_path ) );
+                continue;
+            }
+
+            $rpost = $remote_info[ $remote_id ]['post'] ?? [];
+            $rmeta = $remote_info[ $remote_id ]['meta'] ?? [];
+            $rmeta = apply_rsync_prefix_to_rmeta( $rmeta, $blog_id );
+
+            $att_id = register_local_attachments(
+                $rpost,
+                $rmeta,
+                $blog_id,
+                0,
+                $blog_id
+            );
+
+            if ( $att_id > 0 ) {
+                $stats['registered']++;
+                $stats['registered_remote']++;
+            } else {
+                $stats['errors']++;
+                \WP_CLI::warning( sprintf( 'Falha ao registrar (remoto #%d) %s', $remote_id, $rel_path ) );
+                continue;
+            }
+        }
+
+        \WP_CLI::line( '' );
+        \WP_CLI::line( '================ RSYNC ATTACH SYNC ================' );
+        \WP_CLI::line( sprintf( 'Arquivos encontrados:  %d', $stats['scanned'] ) );
+        \WP_CLI::line( sprintf( 'Já existentes:         %d', $stats['existing'] ) );
+        \WP_CLI::line( sprintf( 'Registrados agora:     %d', $stats['registered'] ) );
+        \WP_CLI::line( sprintf( '   com dados remotos:  %d', $stats['registered_remote'] ) );
+        \WP_CLI::line( sprintf( '   sem dados remotos:  %d', $stats['missing_remote'] ) );
+        \WP_CLI::line( sprintf( 'Erros:                 %d', $stats['errors'] ) );
+        \WP_CLI::line( '===================================================' );
+
+        if ( $missing_files ) {
+            \WP_CLI::warning( 'Arquivos sem correspondência remota:' );
+            foreach ( $missing_files as $miss ) {
+                \WP_CLI::warning( ' - ' . $miss );
+            }
+        }
+
+        if ( $dry_run ) {
+            \WP_CLI::success( 'Dry-run concluído (nenhuma alteração gravada).' );
+        } else {
+            \WP_CLI::success( 'Sincronização concluída.' );
+        }
+    }
+
+    /**
      * Achata e corrige metadados que foram salvos como arrays ou com múltiplas linhas (duplicados) no banco de dados.
      *
      * ## OPTIONS
