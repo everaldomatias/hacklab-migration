@@ -1614,7 +1614,7 @@ class Commands {
      * : Lista de meta keys para inspecionar e corrigir, separadas por vírgula.
      * Se omitido, utiliza as chaves padrão definidas internamente.
      *
-     * [--q:include=<ids>]
+     * [--include=<ids>]
      * : Lista de IDs de posts a serem inspecionados (separados por vírgula).
      *
      * [--<field>=<value>]
@@ -1627,7 +1627,7 @@ class Commands {
      *
      * wp flatten-meta
      * wp flatten-meta --keys=meu_metadado_customizado,outra_chave
-     * wp flatten-meta --keys=views_count --q:include=81833
+     * wp flatten-meta --keys=views_count --include=81833
      * wp flatten-meta --keys=campo_corrompido --dry_run
      */
     function cmd_flatten_meta( $args, $assoc_args ) {
