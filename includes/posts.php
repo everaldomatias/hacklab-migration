@@ -304,7 +304,7 @@ function import_remote_posts( array $args = [] ): array {
  * Localiza o post local correspondente a um post remoto, baseado em metadados de migração.
  *
  * @since 1.0.0
- * @version 1.0.0
+ * @version 1.0.1
  *
  * @param int $remote_id  ID do post na instalação de origem (remota).
  * @param int $blog_id    ID do blog de origem (no multisite). Padrão: 1.
@@ -338,17 +338,17 @@ function find_local_post( int $remote_id, int $blog_id = 1 ): int {
     }
 
     $sql .= "
-        WHERE pm1.meta_key = '_hacklab_migration_source_id' AND pm1.meta_value = %d
-          AND pm2.meta_key = '_hacklab_migration_source_blog' AND pm2.meta_value = %d
+        WHERE pm1.meta_key = '_hacklab_migration_source_id' AND pm1.meta_value = %s
+          AND pm2.meta_key = '_hacklab_migration_source_blog' AND pm2.meta_value = %s
     ";
 
     if ( defined( 'ICL_SITEPRESS_VERSION' ) ) {
         $sql .= " AND (icl.language_code IS NULL OR icl.language_code = 'pt-br') ";
     }
 
-    $sql .= " ORDER BY p.ID ASC LIMIT 1";
+    $sql .= " LIMIT 1";
 
-    $local_id = (int) $wpdb->get_var( $wpdb->prepare( $sql, $remote_id, $blog_id ) );
+    $local_id = (int) $wpdb->get_var( $wpdb->prepare( $sql, (string) $remote_id, (string) $blog_id ) );
 
     if ( $local_id > 0 ) {
         $cache[ $cache_key ] = $local_id;
