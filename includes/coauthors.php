@@ -381,7 +381,7 @@ function import_remote_coauthors( array $args = [] ): array {
 
         if ( $is_update ) { // Post já existe, tenta atualizar
             $postarr['ID'] = $existing;
-            $local_id = (int) wp_update_post( $postarr, true );
+            $local_id = wp_update_post( $postarr, true );
 
             if ( is_wp_error( $local_id ) ) {
                 $summary['errors'][] = 'update: ' . $local_id->get_error_message();
@@ -389,15 +389,19 @@ function import_remote_coauthors( array $args = [] ): array {
                 continue;
             }
 
+            $local_id = (int) $local_id; // Cast seguro
             $summary['updated']++;
         } else {
-            $local_id = (int) wp_insert_post( $postarr, true );
+            // Retirado o (int) para capturar o objeto de erro
+            $local_id = wp_insert_post( $postarr, true );
 
             if ( is_wp_error( $local_id ) || $local_id <= 0 ) {
                 $summary['errors'][] = 'insert: ' . ( is_wp_error( $local_id ) ? $local_id->get_error_message() : 'unknown' );
                 $summary['skipped']++;
                 continue;
             }
+
+            $local_id = (int) $local_id;
 
             add_post_meta( $local_id, '_hacklab_migration_source_id', $remote_id, true );
             add_post_meta( $local_id, '_hacklab_migration_source_blog', $blog_id, true );
@@ -548,6 +552,9 @@ function import_remote_coauthors( array $args = [] ): array {
             (string) ( $row['post_modified'] ?? '' ),
             (string) ( $row['post_modified_gmt'] ?? '' )
         );
+
+        clean_post_cache( $local_id );
+        clean_object_term_cache( $local_id, get_post_type( $local_id ) );
     }
 
     return $summary;
@@ -603,32 +610,41 @@ function cli_mutate_author_to_coauthor( \WP_Post $post ): void {
 }
 
 function cli_assign_migrated_coauthors( \WP_Post $post ): void {
-    $cap = function_exists( 'cap_instance' ) ? cap_instance() : null;
+    $cap = function_exists( '\HacklabMigration\\cap_instance' ) ? \HacklabMigration\cap_instance() : null;
     if ( ! $cap ) return;
 
     $blog_id = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
     if ( $blog_id <= 0 ) $blog_id = 1;
 
     $remote_authors = get_post_meta( $post->ID, 'authors', true );
-    if ( empty( $remote_authors ) ) return;
-
+    $remote_authors = ! empty( $remote_authors ) ? $remote_authors : [];
     $remote_authors = is_array( $remote_authors ) ? $remote_authors : [ $remote_authors ];
 
     $coauthors_logins = [];
 
-    foreach ( $remote_authors as $remote_id ) {
-        $local_ga_id = find_local_post( (int) $remote_id, $blog_id );
+    if ( ! empty( $remote_authors ) ) {
+        foreach ( $remote_authors as $remote_id ) {
+            $local_ga_id = find_local_post( (int) $remote_id, $blog_id );
 
-        if ( $local_ga_id > 0 ) {
-            $ga_post = get_post( $local_ga_id );
+            if ( $local_ga_id > 0 ) {
+                $ga_post = get_post( $local_ga_id );
 
-            if ( $ga_post && $ga_post->post_type === 'guest-author' ) {
-                $coauthors_logins[] = $ga_post->post_name;
+                if ( $ga_post && $ga_post->post_type === 'guest-author' ) {
+                    $slug = $ga_post->post_name;
+
+                    if ( strpos( $slug, 'cap-' ) === 0 ) {
+                        $coauthors_logins[] = $ga_post->post_name;
+                    }
+                }
             }
         }
     }
 
     $coauthors_logins = array_filter( array_unique( $coauthors_logins ) );
+
+    if ( empty( $coauthors_logins ) ) {
+        $coauthors_logins[] = 'cap-redacao';
+    }
 
     if ( ! empty( $coauthors_logins ) ) {
         $cap->add_coauthors( $post->ID, $coauthors_logins, false );
@@ -639,3 +655,4 @@ function cli_assign_migrated_coauthors( \WP_Post $post ): void {
         }
     }
 }
+
