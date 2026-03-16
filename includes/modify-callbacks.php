@@ -222,3 +222,95 @@ function sync_coauthors_plus( \WP_Post $post ): void {
 
     cap_assign_coauthors_to_post( $post->ID, [ 'author' => $authors ] );
 }
+
+/**
+ * Sincroniza metadados de um Post para um Termo da taxonomia 'edicao'.
+ * * @param \WP_Post $post O objeto do post.
+ * @return void
+ */
+function sync_metadata_edicao( \WP_Post $post ): void {
+    $term_name = trim( $post->post_title ) . ' - Teoria e Debate';
+
+    $term = get_term_by( 'name', $term_name, 'edicao' );
+
+    if ( ! $term || is_wp_error( $term ) ) {
+        // Log silencioso para não quebrar a importação via CLI
+        do_action( 'logger', "sync_metadata_edicao: Termo não encontrado para '{$term_name}' (Post ID: {$post->ID})." );
+        return;
+    }
+
+    $term_id = (int) $term->term_id;
+
+    $post_meta = get_post_custom( $post->ID );
+
+    // Chaves internas do WP que NÃO devem poluir a tabela wp_termmeta
+    $blacklisted_keys = [
+        '_edit_lock',
+        '_edit_last',
+        '_pingme',
+        '_encloseme',
+        '_wp_old_slug'
+    ];
+
+    foreach ( $post_meta as $meta_key => $meta_values ) {
+        if ( in_array( $meta_key, $blacklisted_keys, true ) ) {
+            continue;
+        }
+
+        foreach ( $meta_values as $meta_value ) {
+            $unserialized_value = maybe_unserialize( $meta_value );
+            update_term_meta( $term_id, $meta_key, $unserialized_value );
+        }
+    }
+}
+
+/**
+ * Sincroniza um Post com o Termo da taxonomia 'edicao' correspondente,
+ * utilizando o ID de origem como chave de relacionamento.
+ *
+ * @param \WP_Post $post O objeto do post.
+ * @return void
+ */
+function sync_posts_to_edition( \WP_Post $post ): void {
+    $edition_id = (int) get_post_meta( $post->ID, 'wpcf-edicao', true );
+
+    if ( $edition_id <= 0 ) {
+        return;
+    }
+
+    $source_blog = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true );
+    $source_blog = $source_blog > 0 ? $source_blog : 1;
+
+    $taxonomy = 'edicao';
+
+    $terms = get_terms( [
+        'taxonomy'   => $taxonomy,
+        'hide_empty' => false,
+        'fields'     => 'ids',
+        'number'     => 1,
+        'meta_query' => [
+            'relation' => 'AND',
+            [
+                'key'     => '_hacklab_migration_source_id',
+                'value'   => $edition_id,
+                'compare' => '='
+            ],
+            [
+                'key'     => '_hacklab_migration_source_blog',
+                'value'   => $source_blog,
+                'compare' => '='
+            ]
+        ]
+    ] );
+
+    if ( empty( $terms ) || is_wp_error( $terms ) ) {
+        do_action( 'logger', "sync_posts_to_edition: Nenhum termo encontrado para o post ID: {$post->ID}." );
+        return;
+    }
+
+    $term_id = (int) $terms[0];
+
+    if ( ! has_term( $term_id, $taxonomy, $post ) ) {
+        wp_set_object_terms( $post->ID, $term_id, $taxonomy, true );
+    }
+}
