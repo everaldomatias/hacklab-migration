@@ -441,3 +441,104 @@ function fpa_convert_post_to_edition_term( \WP_Post $post ): void {
         }
     }
 }
+
+/**
+ * wp modify-posts --q:include=182872 --q:post_type=evento --fn:"cli_fix_gutenberg_images"
+ */
+function cli_fix_gutenberg_images( \WP_Post $post ): void {
+    if ( ! defined( 'WP_IMPORTING' ) ) {
+        define( 'WP_IMPORTING', true );
+    }
+
+    $content = $post->post_content;
+    if ( empty( $content ) ) return;
+
+    $blog_id  = (int) get_post_meta( $post->ID, '_hacklab_migration_source_blog', true ) ?: 1;
+    $old_base = (string) get_post_meta( $post->ID, '_hacklab_migration_uploads_base', true );
+
+    $content_changed = false;
+
+    if ( $old_base !== '' ) {
+        $upload_dir   = wp_upload_dir();
+        $new_base_url = trailingslashit( $upload_dir['baseurl'] );
+        $old_base_url = trailingslashit( $old_base );
+
+        $cleaned = str_replace( $old_base_url, $new_base_url, $content );
+
+        if ( $blog_id > 1 ) {
+            $old_base_ms = $old_base_url . 'sites/' . $blog_id . '/';
+            $cleaned = str_replace( $old_base_ms, $new_base_url, $cleaned );
+        }
+
+        if ( $cleaned !== $content ) {
+            $content = $cleaned;
+            $content_changed = true;
+        }
+    }
+
+    preg_match_all( '/wp-image-(\d+)/', $content, $matches_html );
+
+    $json_ids = [];
+    if ( preg_match_all( '/"ids"\s*:\s*\[([\d,\s]+)\]/', $content, $matches_json ) ) {
+        foreach ( $matches_json[1] as $id_list ) {
+            $ids = explode( ',', $id_list );
+            foreach ( $ids as $id ) {
+                $json_ids[] = (int) trim( $id );
+            }
+        }
+    }
+
+    $single_ids = [];
+    if ( preg_match_all( '/"id"\s*:\s*(\d+)/', $content, $matches_single ) ) {
+        $single_ids = array_map( 'intval', $matches_single[1] );
+    }
+
+    $all_remote_ids = array_unique( array_merge(
+        array_map( 'intval', $matches_html[1] ),
+        $json_ids,
+        $single_ids
+    ) );
+
+    if ( ! empty( $all_remote_ids ) ) {
+        foreach ( $all_remote_ids as $old_id ) {
+            if ( $old_id <= 0 ) continue;
+
+            $local_id = \HacklabMigration\find_local_post( $old_id, $blog_id );
+
+            if ( $local_id > 0 && $local_id !== $old_id ) {
+                $content_changed = true;
+
+                $content = str_replace( 'wp-image-' . $old_id, 'wp-image-' . $local_id, $content );
+                $content = preg_replace( '/("id"\s*:\s*)' . $old_id . '\b/', '${1}' . $local_id, $content );
+                $content = preg_replace_callback( '/("ids"\s*:\s*\[)([\d,\s]+)(\])/', function( $m ) use ( $old_id, $local_id ) {
+                    $list = preg_replace( '/\b' . $old_id . '\b/', (string)$local_id, $m[2] );
+                    return $m[1] . $list . $m[3];
+                }, $content );
+
+                $new_url = wp_get_attachment_url( $local_id );
+                if ( $new_url ) {
+                    $content = preg_replace_callback(
+                        '/<(img|a)\s[^>]*?wp-image-' . $local_id . '\b[^>]*>/i',
+                        function( $m ) use ( $new_url ) {
+                            $tag = $m[0];
+                            $tag = preg_replace( '/src="[^"]+"/i', 'src="' . esc_url( $new_url ) . '"', $tag );
+                            $tag = preg_replace( '/href="[^"]+"/i', 'href="' . esc_url( $new_url ) . '"', $tag );
+                            return $tag;
+                        },
+                        $content
+                    );
+                }
+            }
+        }
+    }
+
+    if ( $content_changed ) {
+        $source_content = get_post_meta( $post->ID, '_hacklab_migration_source_content', true );
+        if ( ! $source_content ) {
+            update_post_meta( $post->ID, '_hacklab_migration_source_content', $post->post_content );
+        }
+
+        $content = preg_replace( '/\s(srcset|sizes)="[^"]*"/i', '', $content );
+        $post->post_content = $content;
+    }
+}
