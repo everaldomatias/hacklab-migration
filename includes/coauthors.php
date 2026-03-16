@@ -296,6 +296,11 @@ function import_remote_coauthors( array $args = [] ): array {
             $post_name = sanitize_title( (string) $row['post_title'] ?: $remote_id );
         }
 
+        // Garante o prefixo 'cap-' ANTES de montar o array de inserção no banco
+        if ( $post_type === 'guest-author' && strpos( $post_name, 'cap-' ) !== 0 ) {
+            $post_name = 'cap-' . $post_name;
+        }
+
         $postarr = [
             'post_title'    => $row['post_title'] ? (string) $row['post_title'] : 'Sem título',
             'post_content'  => (string) ( $row['post_content'] ? apply_text_filters( $row['post_content'], $row, $options ) : '' ),
