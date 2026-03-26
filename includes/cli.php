@@ -1691,6 +1691,157 @@ class Commands {
         \WP_CLI::success( "Limpeza concluída! {$total_fixed} iterações." );
     }
 
+    /**
+     * Busca os metadados dos attachments no banco remoto e salva localmente em _hacklab_migration_source_meta.
+     *
+     * ## OPTIONS
+     *
+     * <blog_id>
+     * : ID do blog remoto.
+     *
+     * [--include=<ids>]
+     * : IDs locais dos anexos para processar
+     *
+     * [--chunk=<n>]
+     * : Tamanho do lote de processamento. Default: 500.
+     *
+     * [--force]
+     * : Sobrescreve o metadado caso o attachment já o possua.
+     *
+     * [--dry_run]
+     * : Apenas simula, sem salvar no banco.
+     *
+     * [--force_base_prefix]
+     * : Força o uso do prefixo base nas tabelas remotas.
+     *
+     * ## EXAMPLES
+     *
+     * wp fetch-attachment-meta 3
+     * wp fetch-attachment-meta 3 --chunk=1000 --force
+     * wp fetch-attachment-meta 3 --include=123,987 --force
+     * wp fetch-attachment-meta 3 --dry_run
+     */
+    static function cmd_fetch_attachment_meta( $args, $assoc_args ) {
+        if ( empty( $args[0] ) ) {
+            \WP_CLI::error( 'Informe o <blog_id>. Ex: wp fetch-attachment-meta 3' );
+        }
+
+        $blog_id    = (int) $args[0];
+        $chunk      = (int) \WP_CLI\Utils\get_flag_value( $assoc_args, 'chunk', 500 );
+        $force      = \WP_CLI\Utils\get_flag_value( $assoc_args, 'force', false );
+        $dry_run    = \WP_CLI\Utils\get_flag_value( $assoc_args, 'dry_run', false );
+        $force_base = \WP_CLI\Utils\get_flag_value( $assoc_args, 'force_base_prefix', false );
+
+        // [--include=<ids>]
+        $include_raw = \WP_CLI\Utils\get_flag_value( $assoc_args, 'include', '' );
+        $include_ids = [];
+        if ( $include_raw !== '' ) {
+            $include_ids = array_values( array_filter( array_map( 'intval', explode( ',', $include_raw ) ), static fn( $v ) => $v > 0 ) );
+        }
+
+        global $wpdb;
+
+        \WP_CLI::log( "Mapeando attachments locais do blog {$blog_id}..." );
+
+        // 1. Query Otimizada: Busca IDs locais e remotos
+        // Usamos %s para comparar strings no LONGTEXT e manter a alta performance
+        $sql = "
+            SELECT p.ID AS local_id, pm1.meta_value AS remote_id
+            FROM {$wpdb->posts} p
+            INNER JOIN {$wpdb->postmeta} pm1 ON p.ID = pm1.post_id AND pm1.meta_key = '_hacklab_migration_source_id'
+            INNER JOIN {$wpdb->postmeta} pm2 ON p.ID = pm2.post_id AND pm2.meta_key = '_hacklab_migration_source_blog'
+        ";
+
+        // Se não for forçado, ignora os que já possuem o _hacklab_migration_source_meta
+        if ( ! $force ) {
+            $sql .= " LEFT JOIN {$wpdb->postmeta} pm3 ON p.ID = pm3.post_id AND pm3.meta_key = '_hacklab_migration_source_meta'";
+        }
+
+        $query_params = [ (string) $blog_id ];
+
+        $sql .= "
+            WHERE p.post_type = 'attachment'
+              AND pm2.meta_value = %s
+        ";
+
+        if ( ! $force ) {
+            $sql .= " AND pm3.meta_id IS NULL";
+        }
+
+        if ( ! empty( $include_ids ) ) {
+            $placeholders = implode( ',', array_fill( 0, count( $include_ids ), '%d' ) );
+            $sql .= " AND p.ID IN ({$placeholders})";
+            foreach ( $include_ids as $id ) {
+                $query_params[] = $id;
+            }
+        }
+
+        $prepare = $wpdb->prepare( $sql, ...$query_params );
+        $results = $wpdb->get_results( $prepare );
+
+        if ( empty( $results ) ) {
+            \WP_CLI::success( "Nenhum attachment pendente encontrado para o blog {$blog_id}." );
+            return;
+        }
+
+        $total = count( $results );
+        \WP_CLI::log( "Encontrados {$total} attachments para processar." );
+
+        // Barra de progresso para acompanhamento visual
+        $progress = \WP_CLI\Utils\make_progress_bar( 'Buscando metadados', $total );
+
+        $updated = 0;
+        $skipped = 0;
+
+        for ( $i = 0; $i < $total; $i += $chunk ) {
+            $batch      = array_slice( $results, $i, $chunk );
+            $remote_ids = [];
+            $map        = []; // remote_id => local_id
+
+            foreach ( $batch as $row ) {
+                $rid = (int) $row->remote_id;
+                $lid = (int) $row->local_id;
+
+                if ( $rid > 0 ) {
+                    $remote_ids[] = $rid;
+                    $map[ $rid ]  = $lid;
+                }
+            }
+
+            if ( ! empty( $remote_ids ) ) {
+                $remote_data = fetch_all_remote_attachment_meta_by_ids( $remote_ids, $blog_id, $force_base );
+
+                foreach ( $remote_ids as $rid ) {
+                    $lid = $map[ $rid ];
+
+                    if ( isset( $remote_data[ $rid ] ) && ! empty( $remote_data[ $rid ]['meta'] ) ) {
+                        $meta_array = $remote_data[ $rid ]['meta'];
+
+                        if ( ! $dry_run ) {
+                            update_post_meta( $lid, '_hacklab_migration_source_meta', $meta_array );
+                        }
+                        $updated++;
+                    } else {
+                        $skipped++;
+                    }
+                    
+                }
+            }
+
+            $progress->tick();
+            stop_the_insanity();
+        }
+
+        $progress->finish();
+
+        \WP_CLI::line( "" );
+        if ( $dry_run ) {
+            \WP_CLI::success( "[Dry Run] Simulação concluída. Seriam atualizados: {$updated} | Sem meta remota: {$skipped}" );
+        } else {
+            \WP_CLI::success( "Processo concluído! Atualizados: {$updated} | Sem meta remota: {$skipped}" );
+        }
+    }
+
     // Helpers
     private static function csv_or_scalar( $value ) {
         if ( is_array( $value ) ) return $value;
