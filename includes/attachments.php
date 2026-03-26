@@ -1214,3 +1214,133 @@ function mutate_attachment_metadata_for_rsync( string $attached_file, array $att
         'metadata'      => $new_meta
     ];
 }
+
+
+/**
+ * Busca os dados do post e TODOS os metadados de uma lista de attachments remotos.
+ * Ideal para criar snapshots de backup local (ex: _hacklab_migration_source_meta).
+ */
+function fetch_all_remote_attachment_meta_by_ids( array $remote_ids, ?int $blog_id = null, bool $force_base_prefix = false ): array {
+    $remote_ids = array_values(
+        array_unique(
+            array_filter(
+                array_map( 'intval', $remote_ids ),
+                static fn( $v ) => $v > 0
+            )
+        )
+    );
+
+    if ( ! $remote_ids ) {
+        return [];
+    }
+
+    $ext = get_external_wpdb();
+    if ( ! $ext ) {
+        return [];
+    }
+
+    $creds   = get_credentials();
+    $t_posts = resolve_remote_posts_table( $creds, $blog_id, $force_base_prefix );
+    $t_meta  = resolve_remote_postmeta_table( $creds, $blog_id, $force_base_prefix );
+
+    $out   = [];
+    $chunk = 1000;
+
+    for ($i = 0; $i < count( $remote_ids ); $i += $chunk ) {
+        $ids = array_slice( $remote_ids, $i, $chunk );
+        $ph  = implode( ',', array_fill( 0, count( $ids), '%d' ) );
+
+        $sql = "
+            SELECT p.ID, p.post_title, p.post_name, p.post_mime_type, p.guid, p.post_date, p.post_date_gmt
+              FROM {$t_posts} p
+             WHERE p.ID IN ({$ph}) AND p.post_type='attachment'
+        ";
+
+        $stmt = $ext->prepare( $sql, $ids );
+        if ( $stmt === null ) {
+            return [];
+        }
+
+        $rows = $ext->get_results( $stmt, ARRAY_A) ?: [];
+        if ( ! $rows ) {
+            continue;
+        }
+
+        $map = [];
+        foreach ( $rows as $r ) {
+            $map[(int)$r['ID']] = $r;
+        }
+
+        $sqlm = "
+            SELECT post_id, meta_key, meta_value
+              FROM {$t_meta}
+             WHERE post_id IN ({$ph})
+        ";
+
+        $meta_stmt = $ext->prepare( $sqlm, $ids );
+        if ( $meta_stmt === null ) {
+            return [];
+        }
+
+        $meta_rows = $ext->get_results( $meta_stmt, ARRAY_A ) ?: [];
+        $by_post = [];
+        
+        foreach ( $meta_rows as $m ) {
+            $pid = (int) $m['post_id'];
+            $k   = (string) $m['meta_key'];
+            
+            $contains_object = static function ( $val ) use ( &$contains_object ): bool {
+                if ( is_object( $val ) ) return true;
+                if ( is_array( $val ) ) {
+                    foreach ( $val as $vv ) {
+                        if ( $contains_object( $vv ) ) return true;
+                    }
+                }
+                return false;
+            };
+
+            $safe_unserialize = static function ( $value ) use ( $contains_object ) {
+                if ( is_object( $value ) ) return maybe_serialize( $value );
+                if ( is_array( $value ) && $contains_object( $value ) ) return maybe_serialize( $value );
+                if ( ! is_string( $value ) ) return $value;
+                if ( ! is_serialized( $value ) ) return $value;
+
+                if ( preg_match( '/^[OCais]:/i', ltrim( $value ) ) ) {
+                    $un = @unserialize( $value, ['allowed_classes' => false] );
+                    if ( $un !== false || $value === 'b:0;' ) {
+                        if ( $contains_object( $un ) ) return $value;
+                        return $un;
+                    }
+                }
+
+                $un = @unserialize( $value, ['allowed_classes' => false] );
+                if ( $un !== false || $value === 'b:0;' ) {
+                    if ( $contains_object( $un ) ) return $value;
+                    return $un;
+                }
+
+                return $value;
+            };
+
+            $v = $safe_unserialize( $m['meta_value'] );
+            
+            if ( ! isset( $by_post[$pid][$k] ) ) {
+                $by_post[$pid][$k] = $v;
+            } else {
+                $cur = $by_post[$pid][$k];
+                $by_post[$pid][$k] = is_array( $cur ) && array_keys($cur) === range(0, count($cur) - 1) 
+                                     ? array_merge( $cur, [$v] ) 
+                                     : [$cur, $v];
+            }
+        }
+
+        foreach ( $map as $rid => $rpost ) {
+            $out[$rid] = [
+                'post' => $rpost,
+                'meta' => $by_post[$rid] ?? []
+            ];
+        }
+    }
+
+    return $out;
+}
