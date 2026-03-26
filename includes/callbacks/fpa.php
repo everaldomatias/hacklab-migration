@@ -542,3 +542,35 @@ function cli_fix_gutenberg_images( \WP_Post $post ): void {
         $post->post_content = $content;
     }
 }
+
+function cli_extract_attachment_custom_meta( \WP_Post $post ): void {
+    $source_meta = get_post_meta( $post->ID, '_hacklab_migration_source_meta', true );
+
+    if ( empty( $source_meta ) || ! is_array( $source_meta ) ) {
+        return;
+    }
+
+    if ( isset( $source_meta['_credit_text'] ) ) {
+        $credit = $source_meta['_credit_text'];
+        
+        if ( is_array( $credit ) ) {
+            $credit = reset( $credit );
+        }
+        
+        if ( ! empty( $credit ) ) {
+            update_post_meta( $post->ID, '_credit_text', wp_slash( $credit ) );
+        }
+    }
+
+    if ( isset( $source_meta['_dfi_link_to_image'] ) ) {
+        $dfi_link = $source_meta['_dfi_link_to_image'];
+        
+        if ( is_array( $dfi_link ) ) {
+            $dfi_link = reset( $dfi_link );
+        }
+
+        if ( ! empty( $dfi_link ) ) {
+            update_post_meta( $post->ID, '_dfi_link_to_image', wp_slash( $dfi_link ) );
+        }
+    }
+}
