@@ -314,3 +314,55 @@ function sync_posts_to_edition( \WP_Post $post ): void {
         wp_set_object_terms( $post->ID, $term_id, $taxonomy, true );
     }
 }
+
+function set_edition_terms_focus( \WP_Post $post ) {
+
+    $remote_terms = get_post_meta( $post->ID, '_hacklab_migration_remote_terms', true );
+
+    if ( isset( $remote_terms['category'] ) && ! empty( $remote_terms['category'] ) && is_array( $remote_terms['category'] ) ) {
+
+        $editions = [];
+
+        foreach ( $remote_terms['category'] as $category ) {
+
+            if ( strpos( $category['slug'], 'edicao-' ) === 0 ) {
+                $edition_number = (int) str_replace( 'edicao-', '', $category['slug'] );
+
+                if ( $edition_number > 74 ) {
+                    continue;
+                }
+
+                $term_slug = $category['slug'] . '-revista-focus';
+                $term_name = $category['name'];
+
+                $term = get_term_by( 'slug', $term_slug, 'edicao' );
+
+                if ( ! $term ) {
+
+                    $created = wp_insert_term(
+                        $term_name,
+                        'edicao',
+                        [
+                            'slug' => $term_slug,
+                        ]
+                    );
+
+                    if ( is_wp_error( $created ) ) {
+                        continue;
+                    }
+
+                    $term_id = $created['term_id'];
+
+                } else {
+                    $term_id = $term->term_id;
+                }
+
+                $editions[] = (int) $term_id;
+            }
+        }
+
+        if ( ! empty( $editions ) ) {
+            wp_set_object_terms( $post->ID, $editions, 'edicao', false );
+        }
+    }
+}
